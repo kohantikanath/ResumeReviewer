@@ -23,27 +23,34 @@ Columns (header row):
 
 | Column | Required | Notes |
 |--------|----------|-------|
-| Roll Number | Yes | Match key; pattern `^\d{2}bcs\d{5}$` |
+| Roll Number | Yes | Match key; `23bcs10151` or numeric portal id (e.g. `10335`) |
 | Name | Yes | Fuzzy match against PDF header (R104) |
 | Email | No | Report column only; college email inferred from PDF |
 
 If a PDF has no matching metadata row → **R103 HARD**.
 
-## Filename convention
+## Filename convention (R103)
 
-`{NameWithUnderscores}_{RollNumber}_SST.pdf`
+Accepted stem patterns (`.pdf` extension; optional ` - Display Name` suffix ignored):
 
-- Roll: `23bcs10151` style
-- Spaces in name → `_`
-- Case-insensitive roll match in metadata
+| Pattern | Example |
+|---------|---------|
+| BCS roll + SST | `Pooja_Talele_23bcs10151_SST.pdf` |
+| Numeric portal id + SST | `SwaimSahay_10335_SST.pdf` |
+| With display suffix | `SwaimSahay_10335_SST - Swaim Sahay.pdf` |
+| Name-only (Superset) | `Pooja_Talele.pdf` |
 
-Calibration samples (`Good 1.pdf`, etc.) skip R103 in golden tests.
+Roll/id in filename must match metadata `Roll Number` (`23bcs10151` or `10335`), or compact name matches metadata name.
+
+## R104 — Name match
+
+Case-insensitive. `Pooja Talele` vs `POOJA TALELE` passes. Uses normalized lowercase comparison plus fuzzy token match.
 
 ## Thresholds
 
 | Check | Value |
 |-------|-------|
-| R104 name fuzzy match | `rapidfuzz.fuzz.token_sort_ratio` ≥ 85 |
+| R104 name fuzzy match | Normalized lowercase; token_set_ratio ≥ 85 |
 | Section font threshold | `span.size > modal_body_size × 1.15` |
 | R101 min extractable chars | 200 |
 | Phone regex | `(?:\+91[\s-]?)?[6-9]\d{9}` |
@@ -63,3 +70,7 @@ Both SST CGR and BITS CGPA required when both colleges appear (all template resu
 - 404, DNS fail, connection refused → HARD (R502)
 - 403, 429, 999, timeout on bot-block domains (LinkedIn, Tracxn, etc.) → SOFT (R503)
 - Never hard-fail LinkedIn profile URLs on bot-block responses
+
+## Link log (report)
+
+**Link log** sheet lists only **failed** links (`hard_fail`, `soft`, `unknown`) — not URLs that returned OK. Each row includes URL, line/section/anchor text, status, and classification.

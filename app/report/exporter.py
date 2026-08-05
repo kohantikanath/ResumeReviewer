@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.extract.link_locate import build_link_location_map
 from app.links.validator import classify_url
 from app.types import VerificationOutcome
 
@@ -46,13 +47,19 @@ def _build_frames(outcomes: list[VerificationOutcome]) -> tuple[pd.DataFrame, pd
                 }
             )
 
+        link_locations = build_link_location_map(outcome.doc)
+
         for url, (status, note) in outcome.link_statuses.items():
             classification = classify_url(url, status, note)
+            if classification == "pass":
+                continue
+            location = link_locations.get(url, "")
             link_rows.append(
                 {
                     "Filename": outcome.filename,
                     "Roll No": outcome.roll_number,
                     "URL": url,
+                    "Line / Section": location,
                     "Status Code": status if status is not None else "",
                     "Note": note,
                     "Classification": classification,

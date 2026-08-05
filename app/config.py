@@ -7,8 +7,22 @@ COLLEGE_EMAIL_PATTERN = re.compile(
     r"[a-zA-Z0-9._+-]+@sst\.scaler\.com", re.IGNORECASE
 )
 ROLL_NUMBER_PATTERN = re.compile(r"\d{2}bcs\d{5}", re.IGNORECASE)
+# Filename stems (after stripping optional " - Display Name" suffix)
+FILENAME_PATTERN_BCS_SST = re.compile(
+    r"^(.+)_(\d{2}bcs\d{5})_SST$", re.IGNORECASE
+)
+FILENAME_PATTERN_NUMERIC_SST = re.compile(
+    r"^(.+)_(\d+)_SST$", re.IGNORECASE
+)
+FILENAME_PATTERN_BCS_ROLL = re.compile(
+    r"^(.+)_(\d{2}bcs\d{5})$", re.IGNORECASE
+)
+# Legacy full-filename patterns (kept for reference)
 FILENAME_PATTERN = re.compile(
     r"^(.+)_(\d{2}bcs\d{5})_SST\.pdf$", re.IGNORECASE
+)
+FILENAME_PATTERN_ROLL = re.compile(
+    r"^(.+)_(\d{2}bcs\d{5})\.pdf$", re.IGNORECASE
 )
 PHONE_PATTERN = re.compile(r"(?:\+91[\s-]?)?[6-9]\d{9}")
 MAX_FILE_BYTES = 10 * 1024 * 1024

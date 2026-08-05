@@ -35,7 +35,10 @@ async def index() -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
         return HTMLResponse("<h1>ResumeVerify API</h1><p>Upload UI missing.</p>")
-    return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        index_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/health")
