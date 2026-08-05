@@ -1,0 +1,34 @@
+{
+  "Good 1.pdf": {
+    "verdict": "PASS",
+    "rules": []
+  },
+  "Good 2.pdf": {
+    "verdict": "PASS",
+    "rules": []
+  },
+  "Good 3.pdf": {
+    "verdict": "PASS",
+    "rules": []
+  },
+  "Good 4.pdf": {
+    "verdict": "PASS",
+    "rules": []
+  },
+  "Bad 1.pdf": {
+    "verdict": "REVIEW",
+    "rules": ["R201", "R303"]
+  },
+  "Bad 2.pdf": {
+    "verdict": "REVIEW",
+    "rules": ["R303", "R304", "R406", "R505"]
+  },
+  "Bad 3.pdf": {
+    "verdict": "REVIEW",
+    "rules": ["R304", "R407"]
+  },
+  "Bad 4.pdf": {
+    "verdict": "REVIEW",
+    "rules": ["R403", "R501"]
+  }
+}

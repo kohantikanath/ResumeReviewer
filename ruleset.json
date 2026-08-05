@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "rules": [
+    {"id": "R101", "severity": "HARD", "category": "file", "description": "Valid text-extractable PDF"},
+    {"id": "R102", "severity": "HARD", "category": "file", "description": "File size under 10MB"},
+    {"id": "R103", "severity": "HARD", "category": "file", "description": "Filename matches convention and roll in metadata"},
+    {"id": "R104", "severity": "SOFT", "category": "file", "description": "Name in PDF matches metadata"},
+    {"id": "R201", "severity": "HARD", "category": "document", "description": "Exactly one page"},
+    {"id": "R202", "severity": "HARD", "category": "document", "description": "No embedded images"},
+    {"id": "R203", "severity": "HARD", "category": "document", "description": "No emojis"},
+    {"id": "R301", "severity": "HARD", "category": "header", "description": "Student name present at top"},
+    {"id": "R302", "severity": "SOFT", "category": "header", "description": "Phone number present"},
+    {"id": "R303", "severity": "HARD", "category": "header", "description": "College email displayed"},
+    {"id": "R304", "severity": "HARD", "category": "header", "description": "Displayed email matches mailto target"},
+    {"id": "R305", "severity": "HARD", "category": "header", "description": "LinkedIn link in header"},
+    {"id": "R306", "severity": "HARD", "category": "header", "description": "GitHub link in header"},
+    {"id": "R307", "severity": "HARD", "category": "header", "description": "LinkedIn slug matches student name"},
+    {"id": "R401", "severity": "HARD", "category": "sections", "description": "Education section exists"},
+    {"id": "R402", "severity": "HARD", "category": "sections", "description": "Skills section exists"},
+    {"id": "R403", "severity": "HARD", "category": "sections", "description": "Education has college, degree, CGR/CGPA"},
+    {"id": "R404", "severity": "HARD", "category": "sections", "description": "Experience entries complete if section exists"},
+    {"id": "R405", "severity": "HARD", "category": "sections", "description": "Projects section exists"},
+    {"id": "R406", "severity": "HARD", "category": "sections", "description": "Each project has name, link, description"},
+    {"id": "R407", "severity": "SOFT", "category": "sections", "description": "Duplicate content between Experience and Projects"},
+    {"id": "R501", "severity": "HARD", "category": "links", "description": "No malformed or placeholder URLs"},
+    {"id": "R502", "severity": "HARD", "category": "links", "description": "No broken links (404/DNS/conn refused)"},
+    {"id": "R503", "severity": "SOFT", "category": "links", "description": "Unverifiable links on bot-block domains"},
+    {"id": "R504", "severity": "HARD", "category": "links", "description": "GitHub username matches across header and projects"},
+    {"id": "R505", "severity": "SOFT", "category": "links", "description": "Tracking parameters in URLs"}
+  ]
+}
