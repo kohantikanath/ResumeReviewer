@@ -42,7 +42,8 @@ def metadata():
 )
 def test_verdict_matches_calibration(filename, expected, metadata):
     path = FIXTURES / filename
-    doc, evaluation, _ = verify_pdf(path, metadata, check_links=False)
+    outcome = verify_pdf(path, metadata, check_links=False)
+    evaluation = outcome.evaluation
     exp = expected[filename]
     assert evaluation.verdict.value == exp["verdict"], (
         f"{filename}: expected {exp['verdict']}, got {evaluation.verdict.value}. "

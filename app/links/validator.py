@@ -74,13 +74,21 @@ async def _check_one(
     return url, status, note
 
 
-async def check_urls(urls: list[str]) -> dict[str, tuple[int | None, str]]:
-    cache: dict[str, tuple[int | None, str]] = {}
+async def check_urls(
+    urls: list[str],
+    cache: dict[str, tuple[int | None, str]] | None = None,
+) -> dict[str, tuple[int | None, str]]:
+    if cache is None:
+        cache = {}
+    unique = [u for u in urls if u not in cache]
+    if not unique:
+        return cache
+
     async with httpx.AsyncClient(
         timeout=LINK_TIMEOUT_SEC,
         headers={"User-Agent": "ResumeVerify/1.0"},
     ) as client:
-        tasks = [_check_one(client, url, cache) for url in urls]
+        tasks = [_check_one(client, url, cache) for url in unique]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for item in results:
             if isinstance(item, tuple):
