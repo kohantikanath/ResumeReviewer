@@ -37,3 +37,7 @@ Thumbs.db
 # Project uploads (runtime)
 uploads/
 *.db
+
+# Local dev notes (not for GitHub)
+TRACK.md
+resume-reviewer-backup.bundle

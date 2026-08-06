@@ -18,9 +18,13 @@ def test_health():
 
 def test_index_html():
     client = TestClient(app)
-    res = client.get("/")
+    res = client.get("/dashboard", follow_redirects=True)
     assert res.status_code == 200
     assert "ResumeVerify" in res.text
+
+    root = client.get("/", follow_redirects=True)
+    assert root.status_code == 200
+    assert "dashboard" in str(root.url) or "ResumeVerify" in root.text
 
 
 def test_batch_upload_and_poll():
@@ -46,9 +50,30 @@ def test_batch_upload_and_poll():
     data = status.json()
     assert data["status"] == "completed"
     assert data["report_ready"]
+    assert data["outcomes_summary"]
 
     report = client.get(f"/api/jobs/{job_id}/report")
     assert report.status_code == 200
     assert report.headers["content-type"].startswith(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+def test_job_persists_across_store_reload():
+    """Job JSON on disk survives a fresh in-memory store (server restart)."""
+    from app.api.jobs import JobStatus, JobStore, _DEFAULT_INDEX
+
+    store = JobStore(persist_dir=_DEFAULT_INDEX)
+    job = store.create(total=1)
+    store.update(
+        job.id,
+        status=JobStatus.COMPLETED,
+        processed=1,
+        outcomes_summary=[{"name": "Test", "verdict": "PASS", "issues": []}],
+    )
+
+    reloaded = JobStore(persist_dir=_DEFAULT_INDEX)
+    loaded = reloaded.get(job.id)
+    assert loaded is not None
+    assert loaded.status.value == "completed"
+    assert len(loaded.outcomes_summary) == 1

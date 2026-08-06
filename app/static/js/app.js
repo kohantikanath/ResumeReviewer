@@ -1,6 +1,14 @@
 /* ResumeVerify dashboard */
 
 const STORAGE_KEY = "rv_recent_jobs";
+const RESULTS_CACHE_KEY = "rv_job_results";
+
+const ROUTES = {
+  dashboard: "/dashboard",
+  history: "/history",
+  docs: "/docs",
+  results: "/results",
+};
 
 const state = {
   currentJobId: null,
@@ -24,6 +32,35 @@ function formatIssues(outcome) {
   return outcome.issues.map((i) => i.reason || i.rule).join("; ");
 }
 
+function getResultsCache() {
+  return JSON.parse(localStorage.getItem(RESULTS_CACHE_KEY) || "{}");
+}
+
+function cacheJobResults(data) {
+  if (!data?.id || !data.outcomes_summary?.length) return;
+  const cache = getResultsCache();
+  cache[data.id] = {
+    id: data.id,
+    status: data.status,
+    total: data.total,
+    created_at: data.created_at,
+    outcomes_summary: data.outcomes_summary,
+    report_ready: data.report_ready || false,
+  };
+  const keys = Object.keys(cache);
+  if (keys.length > 20) {
+    keys.sort((a, b) => (cache[b].created_at || "").localeCompare(cache[a].created_at || ""));
+    keys.slice(20).forEach((k) => delete cache[k]);
+  }
+  localStorage.setItem(RESULTS_CACHE_KEY, JSON.stringify(cache));
+}
+
+function getCachedJobResults(jobId) {
+  const cached = getResultsCache()[jobId];
+  if (!cached?.outcomes_summary?.length) return null;
+  return cached;
+}
+
 function saveRecentJob(entry) {
   const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
   const filtered = list.filter((j) => j.id !== entry.id);
@@ -35,6 +72,101 @@ function getRecentJobs() {
   return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
 }
 
+function formatJobTime(createdAt) {
+  if (!createdAt) return "Completed";
+  try {
+    return new Date(createdAt).toLocaleString();
+  } catch {
+    return createdAt;
+  }
+}
+
+function bindJobViewLinks(root) {
+  root.querySelectorAll("[data-job-view]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      openJobResults(el.dataset.jobView);
+    });
+  });
+}
+
+async function fetchJobData(jobId) {
+  try {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    if (res.ok) {
+      const data = await res.json();
+      cacheJobResults(data);
+      return data;
+    }
+  } catch {
+    /* server unreachable */
+  }
+
+  const fromBrowser = getCachedJobResults(jobId);
+  if (fromBrowser) return fromBrowser;
+
+  const fromList = getRecentJobs().find((j) => j.id === jobId);
+  if (fromList?.outcomes_summary?.length) {
+    const data = {
+      id: jobId,
+      status: fromList.status || "completed",
+      total: fromList.total,
+      created_at: fromList.created_at,
+      outcomes_summary: fromList.outcomes_summary,
+      report_ready: fromList.report_ready || false,
+    };
+    cacheJobResults(data);
+    return data;
+  }
+  return null;
+}
+
+function showHistoryNotice(message) {
+  const el = $("#historyNotice");
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+async function openJobResults(jobId) {
+  const data = await fetchJobData(jobId);
+  if (!data?.outcomes_summary?.length) {
+    showHistoryNotice(
+      "Could not load results for this job. Run verification again if the server was restarted before results were saved."
+    );
+    if (parsePath(window.location.pathname).view === "results") {
+      navigateTo("dashboard", null, true);
+    }
+    return false;
+  }
+
+  showHistoryNotice("");
+  state.currentJobId = data.id;
+  state.currentJobData = data;
+  navigateTo("results", data.id);
+  renderResultsPage(data);
+  return true;
+}
+
+function pathForView(view, jobId = null) {
+  if (view === "results" && jobId) return `/results/${jobId}`;
+  return ROUTES[view] || ROUTES.dashboard;
+}
+
+function parsePath(pathname) {
+  const resultsMatch = pathname.match(/^\/results\/([a-f0-9-]+)$/i);
+  if (resultsMatch) return { view: "results", jobId: resultsMatch[1] };
+  if (pathname === "/results") return { view: "results", jobId: null };
+  if (pathname === "/history") return { view: "history", jobId: null };
+  if (pathname === "/docs") return { view: "docs", jobId: null };
+  return { view: "dashboard", jobId: null };
+}
+
 function showView(name) {
   $$(".view").forEach((v) => v.classList.remove("active"));
   $$(".nav-links a").forEach((a) => a.classList.remove("active"));
@@ -43,7 +175,45 @@ function showView(name) {
   const nav = document.querySelector(`.nav-links a[data-view="${name}"]`);
   if (nav) nav.classList.add("active");
   if (name === "history") renderHistoryTable();
-  if (name === "docs") return;
+}
+
+function navigateTo(view, jobId = null, replace = false) {
+  const path = pathForView(view, jobId);
+  const stateObj = { view, jobId };
+  if (replace) {
+    history.replaceState(stateObj, "", path);
+  } else if (window.location.pathname !== path) {
+    history.pushState(stateObj, "", path);
+  }
+  showView(view);
+}
+
+async function loadRoute() {
+  const { view, jobId } = parsePath(window.location.pathname);
+
+  if (view === "results" && jobId) {
+    await openJobResults(jobId);
+    return;
+  }
+
+  if (view === "results" && state.currentJobData) {
+    showView("results");
+    renderResultsPage(state.currentJobData);
+    return;
+  }
+
+  if (view === "history") {
+    showView("history");
+    renderHistoryTable();
+    return;
+  }
+
+  if (view === "docs") {
+    showView("docs");
+    return;
+  }
+
+  showView("dashboard");
 }
 
 async function checkApiHealth() {
@@ -113,6 +283,7 @@ async function pollJob(jobId) {
   }
   const data = await res.json();
   state.currentJobData = data;
+  cacheJobResults(data);
 
   const pct = data.total ? Math.round((data.processed / data.total) * 100) : 0;
 
@@ -132,7 +303,7 @@ async function pollJob(jobId) {
       total: data.total,
       created_at: data.created_at,
     });
-    renderRecentActivity();
+    renderHistoryTable();
     return;
   }
 
@@ -145,8 +316,12 @@ async function pollJob(jobId) {
       status: "completed",
       total: data.total,
       created_at: data.created_at,
+      outcomes_summary: data.outcomes_summary,
+      report_ready: data.report_ready,
     });
-    renderRecentActivity();
+    if (document.getElementById("view-history").classList.contains("active")) {
+      renderHistoryTable();
+    }
     showResults(data);
   }
 }
@@ -163,12 +338,9 @@ function computeStats(summary) {
   return { total: summary.length, pass, review, error };
 }
 
-function showResults(data) {
-  state.currentJobId = data.id;
-  showView("results");
-
+function renderResultsPage(data) {
   $("#resultsTitle").textContent = "Verification Complete";
-  $("#resultsSubtitle").textContent = `Job ID: ${shortJobId(data.id)} • Completed just now`;
+  $("#resultsSubtitle").textContent = `Job ID: ${shortJobId(data.id)} • ${formatJobTime(data.created_at)}`;
 
   const summary = data.outcomes_summary || [];
   const stats = computeStats(summary);
@@ -178,7 +350,18 @@ function showResults(data) {
   $("#statReview").textContent = stats.review;
   $("#statError").textContent = stats.error;
 
+  const downloadBtn = $("#downloadExcelBtn");
+  downloadBtn.disabled = !data.report_ready;
+
   renderResultsTable(summary, $("#resultFilter").value);
+}
+
+function showResults(data) {
+  state.currentJobId = data.id;
+  state.currentJobData = data;
+  cacheJobResults(data);
+  navigateTo("results", data.id);
+  renderResultsPage(data);
 }
 
 function renderResultsTable(summary, filter) {
@@ -235,23 +418,49 @@ function methodLabel(method) {
     zip: "ZIP Bundle",
     direct: "Direct Upload",
   };
-  return map[method] || method || "Upload";
+  return map[method] || "Verification";
 }
 
-function renderRecentActivity() {
-  const tbody = $("#recentTableBody");
-  const jobs = getRecentJobs();
-  if (!jobs.length) {
-    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text-muted);padding:1rem">No recent jobs yet.</td></tr>`;
-    return;
+async function loadMergedJobs() {
+  const byId = new Map();
+  for (const j of getRecentJobs()) {
+    byId.set(j.id, { ...j });
   }
-  tbody.innerHTML = jobs
+
+  try {
+    const res = await fetch("/api/jobs?limit=20");
+    if (res.ok) {
+      for (const sj of (await res.json()).jobs || []) {
+        const existing = byId.get(sj.id);
+        const cached = getCachedJobResults(sj.id);
+        byId.set(sj.id, {
+          id: sj.id,
+          method: existing?.method || sj.method,
+          status: sj.status,
+          total: sj.total,
+          created_at: sj.created_at || existing?.created_at,
+          report_ready: sj.report_ready || existing?.report_ready || false,
+          outcomes_summary: existing?.outcomes_summary || cached?.outcomes_summary,
+        });
+      }
+    }
+  } catch {
+    /* local list only */
+  }
+
+  return Array.from(byId.values()).sort((a, b) =>
+    (b.created_at || "").localeCompare(a.created_at || "")
+  );
+}
+
+function renderJobRows(jobs) {
+  return jobs
     .map((j) => {
       let statusBadge;
       let reportCell;
       if (j.status === "completed") {
-        statusBadge = `<span class="badge badge-pass">Completed</span>`;
-        reportCell = `<a href="/api/jobs/${j.id}/report" class="link-action">Download</a>`;
+        statusBadge = `<span class="badge badge-pass">COMPLETED</span>`;
+        reportCell = `<button type="button" class="link-action" data-job-view="${j.id}">View</button> · <a href="/api/jobs/${j.id}/report" class="link-action">Download</a>`;
       } else if (j.status === "failed") {
         statusBadge = `<span class="badge badge-error">Failed</span>`;
         reportCell = "—";
@@ -269,42 +478,33 @@ function renderRecentActivity() {
     .join("");
 }
 
-function renderHistoryTable() {
-  const tbody = $("#historyTableBody");
-  const jobs = getRecentJobs();
-  if (!jobs.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);padding:1rem">No history yet.</td></tr>`;
+function clearHistory() {
+  if (
+    !confirm(
+      "Clear all job history? This removes saved jobs and reports from this computer."
+    )
+  ) {
     return;
   }
-  tbody.innerHTML = jobs
-    .map((j) => {
-      const statusBadge =
-        j.status === "completed"
-          ? `<span class="badge badge-pass">Completed</span>`
-          : j.status === "failed"
-            ? `<span class="badge badge-error">Failed</span>`
-            : `<span class="badge badge-processing">Processing</span>`;
-      const actions =
-        j.status === "completed"
-          ? `<button type="button" class="link-action" data-open-job="${j.id}">View results</button> · <a href="/api/jobs/${j.id}/report">Excel</a>`
-          : "—";
-      return `<tr>
-        <td>${shortJobId(j.id)}</td>
-        <td>${methodLabel(j.method)}</td>
-        <td>${j.total || "—"}</td>
-        <td>${statusBadge}</td>
-        <td>${actions}</td>
-      </tr>`;
-    })
-    .join("");
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(RESULTS_CACHE_KEY);
+  showHistoryNotice("");
+  fetch("/api/jobs/clear", { method: "POST" })
+    .catch(() => {})
+    .finally(() => renderHistoryTable());
+}
 
-  tbody.querySelectorAll("[data-open-job]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.openJob;
-      const res = await fetch(`/api/jobs/${id}`);
-      if (res.ok) showResults(await res.json());
-    });
-  });
+async function renderHistoryTable() {
+  const tbody = $("#historyTableBody");
+  const jobs = await loadMergedJobs();
+
+  if (!jobs.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text-muted);padding:1rem">No history yet. Run a verification from the Dashboard.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = renderJobRows(jobs);
+  bindJobViewLinks(tbody);
 }
 
 async function runVerification() {
@@ -365,13 +565,16 @@ function init() {
   $$(".nav-links a[data-view]").forEach((a) => {
     a.addEventListener("click", (e) => {
       e.preventDefault();
-      showView(a.dataset.view);
+      navigateTo(a.dataset.view);
     });
   });
 
+  window.addEventListener("popstate", () => loadRoute());
+
   $("#submitBtn").addEventListener("click", runVerification);
+  $("#clearHistoryBtn").addEventListener("click", clearHistory);
   $("#newVerificationBtn").addEventListener("click", () => {
-    showView("dashboard");
+    navigateTo("dashboard");
     $("#progressWrap").classList.add("hidden");
     setProgress(0, "");
   });
@@ -391,13 +594,13 @@ function init() {
   $$(".footer-links a[data-view]").forEach((a) => {
     a.addEventListener("click", (e) => {
       e.preventDefault();
-      showView(a.dataset.view);
+      navigateTo(a.dataset.view);
     });
   });
 
-  renderRecentActivity();
   checkApiHealth();
   setInterval(checkApiHealth, 30000);
+  loadRoute();
 }
 
 document.addEventListener("DOMContentLoaded", init);

@@ -410,6 +410,16 @@ a:hover { text-decoration: underline; }
 }
 .link-action:hover { text-decoration: underline; }
 
+.history-notice {
+  background: var(--review-bg);
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+}
+
 /* Progress */
 .progress-bar-wrap {
   background: var(--border-light);

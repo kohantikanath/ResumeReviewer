@@ -9,13 +9,13 @@
 <body>
   <div class="app-shell">
     <header class="top-nav">
-      <div class="logo">
+      <a href="/dashboard" class="logo" style="text-decoration:none">
         <span class="logo-resume">Resume</span><span class="logo-verify">Verify</span>
-      </div>
+      </a>
       <ul class="nav-links">
-        <li><a href="#" data-view="dashboard" class="active">Dashboard</a></li>
-        <li><a href="#" data-view="history">History</a></li>
-        <li><a href="#" data-view="docs">Docs</a></li>
+        <li><a href="/dashboard" data-view="dashboard" class="active">Dashboard</a></li>
+        <li><a href="/history" data-view="history">History</a></li>
+        <li><a href="/docs" data-view="docs">Docs</a></li>
       </ul>
       <div class="api-status">
         <span class="status-dot" id="apiStatusDot"></span>
@@ -95,21 +95,6 @@
           <p class="status-message" id="runStatus"></p>
         </div>
       </div>
-
-      <div class="card">
-        <h2 class="card-title">Recent Activity</h2>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Job ID</th>
-              <th>Method</th>
-              <th>Status</th>
-              <th>Report</th>
-            </tr>
-          </thead>
-          <tbody id="recentTableBody"></tbody>
-        </table>
-      </div>
     </section>
 
     <!-- Results -->
@@ -185,18 +170,24 @@
       <div class="page-header">
         <div>
           <h1 class="page-title">Job History</h1>
-          <p class="page-subtitle">Recent verification jobs on this server session</p>
+          <p class="page-subtitle">Your recent verification runs — click View to open full results</p>
+        </div>
+        <div class="header-actions">
+          <button type="button" id="clearHistoryBtn" class="btn btn-secondary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/></svg>
+            Clear History
+          </button>
         </div>
       </div>
+      <div id="historyNotice" class="history-notice hidden" role="alert"></div>
       <div class="card">
         <table class="data-table">
           <thead>
             <tr>
               <th>Job ID</th>
               <th>Method</th>
-              <th>Total</th>
               <th>Status</th>
-              <th>Actions</th>
+              <th>Report</th>
             </tr>
           </thead>
           <tbody id="historyTableBody"></tbody>
@@ -238,7 +229,7 @@
     <footer class="app-footer">
       <span>ResumeVerify v1.2.0 · Automated SST Compliance</span>
       <div class="footer-links">
-        <a href="#" data-view="docs">Implementation Docs</a>
+        <a href="/docs" data-view="docs">Implementation Docs</a>
         <a href="https://github.com/kohantikanath/ResumeReviewer" target="_blank" rel="noopener">GitHub</a>
       </div>
     </footer>

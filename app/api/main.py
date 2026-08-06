@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.jobs import JobStatus, job_store
@@ -35,8 +35,7 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index() -> HTMLResponse:
+def _index_html() -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
         return HTMLResponse("<h1>ResumeVerify API</h1><p>Upload UI missing.</p>")
@@ -44,6 +43,20 @@ async def index() -> HTMLResponse:
         index_path.read_text(encoding="utf-8"),
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.get("/")
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/history", response_class=HTMLResponse)
+@app.get("/docs", response_class=HTMLResponse)
+@app.get("/results", response_class=HTMLResponse)
+@app.get("/results/{job_id}", response_class=HTMLResponse)
+async def spa_pages(job_id: str | None = None) -> HTMLResponse:
+    return _index_html()
 
 
 @app.get("/api/health")
@@ -179,7 +192,7 @@ async def create_batch_from_forms_csv(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    job = job_store.create(total=len(applications))
+    job = job_store.create(total=len(applications), method="forms")
     background_tasks.add_task(
         _run_forms_csv_job,
         job.id,
@@ -253,7 +266,8 @@ async def create_batch(
     if not pdf_paths:
         raise HTTPException(status_code=400, detail="No PDF files to process")
 
-    job = job_store.create(total=len(pdf_paths))
+    upload_method = "zip" if bundle and bundle.filename else "direct"
+    job = job_store.create(total=len(pdf_paths), method=upload_method)
     background_tasks.add_task(
         _run_batch_job,
         job.id,
@@ -264,6 +278,18 @@ async def create_batch(
     )
 
     return {"job_id": job.id, "total": job.total, "status": job.status.value}
+
+
+@app.post("/api/jobs/clear")
+async def clear_jobs() -> dict[str, int | str]:
+    """Remove all jobs from memory/disk and delete old batch work folders."""
+    job_store.clear_all()
+    removed = 0
+    for child in UPLOAD_ROOT.iterdir():
+        if child.is_dir() and child.name.startswith("rv_"):
+            shutil.rmtree(child, ignore_errors=True)
+            removed += 1
+    return {"status": "ok", "removed_workdirs": removed}
 
 
 @app.get("/api/jobs")
@@ -278,6 +304,7 @@ async def list_jobs(limit: int = Query(20, ge=1, le=100)) -> dict:
                 "processed": j.processed,
                 "phase": j.phase,
                 "created_at": j.created_at,
+                "method": j.method,
                 "report_ready": bool(j.report_path),
             }
             for j in jobs
