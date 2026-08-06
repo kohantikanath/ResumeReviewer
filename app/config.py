@@ -68,6 +68,10 @@ BOT_BLOCK_DOMAINS = frozenset(
     {
         "linkedin.com",
         "www.linkedin.com",
+        "leetcode.com",
+        "www.leetcode.com",
+        "github.com",
+        "www.github.com",
         "tracxn.com",
         "www.tracxn.com",
     }

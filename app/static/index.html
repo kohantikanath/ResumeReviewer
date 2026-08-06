@@ -80,7 +80,7 @@
 
         <div class="checkbox-row">
           <input id="checkLinks" type="checkbox" checked />
-          <label for="checkLinks">Check live links (slower)</label>
+          <label for="checkLinks">Check live links (broken vs working — does not compare profile names to metadata)</label>
         </div>
 
         <div class="run-row">
@@ -114,6 +114,20 @@
             Download Excel Report
           </button>
         </div>
+      </div>
+
+      <div id="resultsLiveBanner" class="card live-banner hidden" aria-live="polite">
+        <div class="live-banner-row">
+          <div class="processing-spinner processing-spinner-sm" aria-hidden="true"></div>
+          <div class="live-banner-text">
+            <strong id="liveBannerCount">0 of 0 done</strong>
+            <p id="liveBannerPhase">Starting…</p>
+          </div>
+        </div>
+        <div class="progress-bar-wrap live-banner-bar">
+          <div class="progress-bar" id="liveBannerBar"></div>
+        </div>
+        <p class="live-banner-hint">Results appear below as each resume finishes — review while the rest are still running.</p>
       </div>
 
       <div class="stats-row">
@@ -161,6 +175,7 @@
         </table>
         <div class="table-footer">
           <span id="tableShowing">Showing 0 entries</span>
+          <div id="tablePagination" class="table-pagination hidden" aria-label="Results pagination"></div>
         </div>
       </div>
     </section>

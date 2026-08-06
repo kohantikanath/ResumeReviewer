@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -109,6 +110,7 @@ async def download_google_drive_pdfs(
     items: list[tuple[str, str]],
     dest_dir: Path,
     timeout: float = 60.0,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[tuple[str, Path]]:
     """
     Download multiple Drive PDFs.
@@ -124,12 +126,15 @@ async def download_google_drive_pdfs(
         headers={"User-Agent": "ResumeVerify/1.0"},
         follow_redirects=True,
     ) as client:
-        for url, name in items:
+        total = len(items)
+        for index, (url, name) in enumerate(items):
             try:
                 path = await download_google_drive_pdf(url, dest_dir, client, name)
                 results.append((url, path))
             except Exception as exc:
                 errors.append(f"{name or url}: {exc}")
+            if progress_callback:
+                progress_callback(index + 1, total)
 
     if errors and not results:
         raise ValueError("No resumes downloaded. " + "; ".join(errors[:3]))

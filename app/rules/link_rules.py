@@ -32,6 +32,15 @@ def _failure_explanation(
     note: str,
     domain: str,
 ) -> str:
+    if note.startswith("ddg:valid"):
+        return "verified via DuckDuckGo search index (site blocks direct bots)"
+    if note == "profile_bot_block_unverified":
+        return (
+            "site blocks automated checks (HTTP 403); profile may still open in a browser — "
+            "could not confirm via search index"
+        )
+    if note == "ddg_not_indexed":
+        return "not found in search indexes — likely broken or private profile"
     if domain in BOT_BLOCK_DOMAINS and status in (403, 429, 999):
         return (
             f"automated check got HTTP {status} — {domain} blocks bots; "
@@ -147,8 +156,17 @@ def network_link_results(
         if status in (404, 0) or note in ("dns_failure", "connection_refused"):
             if domain in BOT_BLOCK_DOMAINS and status in (403, 429, 999):
                 is_soft = True
+            elif note == "ddg_not_indexed":
+                is_hard = True
             else:
                 is_hard = True
+        elif note.startswith("ddg:valid"):
+            continue
+        elif note == "profile_bot_block_unverified":
+            # Bot-blocked profile host; link often works in a browser — not broken
+            continue
+        elif note == "ddg_not_indexed":
+            is_hard = True
         elif status in (403, 429, 999) or note == "timeout":
             if domain in BOT_BLOCK_DOMAINS or status in (403, 429, 999):
                 is_soft = True

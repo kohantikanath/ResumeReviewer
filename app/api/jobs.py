@@ -32,6 +32,7 @@ class JobRecord:
     error: str = ""
     report_path: str = ""
     report_csv_zip_path: str = ""
+    work_dir: str = ""
     method: str = ""
     outcomes_summary: list[dict[str, Any]] = field(default_factory=list)
 
@@ -76,6 +77,7 @@ class JobStore:
             "error": job.error,
             "report_path": job.report_path,
             "report_csv_zip_path": job.report_csv_zip_path,
+            "work_dir": job.work_dir,
             "method": job.method,
             "outcomes_summary": job.outcomes_summary,
         }
@@ -104,6 +106,7 @@ class JobStore:
             error=str(data.get("error", "")),
             report_path=str(data.get("report_path", "")),
             report_csv_zip_path=str(data.get("report_csv_zip_path", "")),
+            work_dir=str(data.get("work_dir", "")),
             method=str(data.get("method", "")),
             outcomes_summary=list(data.get("outcomes_summary", [])),
         )
@@ -159,6 +162,7 @@ class JobStore:
         error: str | None = None,
         report_path: Path | None = None,
         report_csv_zip_path: Path | None = None,
+        work_dir: Path | None = None,
         outcomes_summary: list[dict[str, Any]] | None = None,
     ) -> None:
         with self._lock:
@@ -180,6 +184,8 @@ class JobStore:
                 job.report_path = str(report_path)
             if report_csv_zip_path is not None:
                 job.report_csv_zip_path = str(report_csv_zip_path)
+            if work_dir is not None:
+                job.work_dir = str(work_dir)
             if outcomes_summary is not None:
                 job.outcomes_summary = outcomes_summary
             self._save(job)
@@ -196,3 +202,21 @@ class JobStore:
 
 
 job_store = JobStore(persist_dir=_DEFAULT_INDEX)
+
+
+def mark_stale_running_jobs() -> int:
+    """After server restart, background workers are gone — don't leave zombie jobs."""
+    marked = 0
+    for job in job_store.list_recent(100):
+        if job.status in (JobStatus.RUNNING, JobStatus.QUEUED):
+            job_store.update(
+                job.id,
+                status=JobStatus.FAILED,
+                phase="error",
+                error=(
+                    "Server restarted while this job was running. "
+                    "Run verification again — any results already saved are still viewable below."
+                ),
+            )
+            marked += 1
+    return marked

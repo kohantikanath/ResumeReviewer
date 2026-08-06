@@ -42,15 +42,19 @@ async def verify_pdf_async(
     metadata: dict[str, dict] | None = None,
     check_links: bool = True,
     url_cache: dict[str, tuple[int | None, str]] | None = None,
+    vanity_cache: dict[str, tuple[int | None, str]] | None = None,
 ) -> VerificationOutcome:
-    doc = extract_pdf(pdf_path)
+    doc = await asyncio.to_thread(extract_pdf, pdf_path)
     link_statuses: dict[str, tuple[int | None, str]] = {}
 
     if check_links:
         urls = _all_urls(doc)
         if urls:
             cache = url_cache if url_cache is not None else {}
-            link_statuses = await check_urls(urls, cache=cache)
+            vcache = vanity_cache if vanity_cache is not None else {}
+            link_statuses = await check_urls(
+                urls, cache=cache, vanity_cache=vcache
+            )
             if url_cache is not None:
                 url_cache.update(link_statuses)
 
@@ -76,38 +80,39 @@ async def verify_batch_async(
     metadata_path: Path | None = None,
     check_links: bool = True,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    outcome_callback: Callable[[VerificationOutcome, int, int], None] | None = None,
 ) -> list[VerificationOutcome]:
     metadata = load_metadata(metadata_path) if metadata_path else {}
     url_cache: dict[str, tuple[int | None, str]] = {}
-
-    if check_links:
-        all_urls: list[str] = []
-        for path in pdf_paths:
-            doc = extract_pdf(path)
-            all_urls.extend(_all_urls(doc))
-        unique_urls = list(dict.fromkeys(all_urls))
-        if unique_urls:
-            await check_urls(unique_urls, cache=url_cache)
-
-    outcomes: list[VerificationOutcome] = []
+    vanity_cache: dict[str, tuple[int | None, str]] = {}
     total = len(pdf_paths)
+    outcomes: list[VerificationOutcome] = []
 
     for index, path in enumerate(pdf_paths):
-        doc = extract_pdf(path)
+        doc = await asyncio.to_thread(extract_pdf, path)
+        doc_urls = _all_urls(doc)
+
+        if check_links and doc_urls:
+            if progress_callback:
+                progress_callback(index, total, "links")
+            await check_urls(doc_urls, cache=url_cache, vanity_cache=vanity_cache)
+
         per_doc_links = {
-            u: url_cache[u] for u in _all_urls(doc) if u in url_cache
+            u: url_cache[u] for u in doc_urls if u in url_cache
         }
         evaluation = _evaluate_doc(doc, metadata, per_doc_links, check_links)
-        outcomes.append(
-            VerificationOutcome(
-                path=path,
-                doc=doc,
-                evaluation=evaluation,
-                link_statuses=per_doc_links,
-            )
+        outcome = VerificationOutcome(
+            path=path,
+            doc=doc,
+            evaluation=evaluation,
+            link_statuses=per_doc_links,
         )
+        outcomes.append(outcome)
+        processed = index + 1
         if progress_callback:
-            progress_callback(index + 1, total, "rules")
+            progress_callback(processed, total, "rules")
+        if outcome_callback:
+            outcome_callback(outcome, processed, total)
 
     return outcomes
 

@@ -10,11 +10,18 @@ const ROUTES = {
   results: "/results",
 };
 
+const RESULTS_PAGE_SIZE = 5;
+
 const state = {
   currentJobId: null,
   currentJobData: null,
   uploadMethod: null,
   pollTimer: null,
+  resultsPage: 1,
+  processingJobId: null,
+  liveProcessing: false,
+  lastPollProcessed: -1,
+  lastProgressAt: 0,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -274,42 +281,208 @@ function setProgress(pct, message) {
   if (msg) msg.textContent = message || "";
 }
 
+const PHASE_LABELS = {
+  queued: "Job queued — starting soon…",
+  prepare: "Preparing batch…",
+  download: "Downloading resumes from Google Drive",
+  links: "Checking live links — this step can take a while on large batches",
+  rules: "Running rule checks on each resume",
+  report: "Building Excel report…",
+  done: "Complete",
+  error: "Failed",
+};
+
+function phaseDetail(data) {
+  const phase = data.phase || "";
+  const total = data.total || 0;
+  const processed = data.processed || 0;
+  if (phase === "download" && total) {
+    const next = Math.min(processed + 1, total);
+    return `Downloading resume ${next} of ${total} from Drive…`;
+  }
+  if (phase === "links" && total) {
+    const next = processed + 1;
+    return `Checking links for resume ${next} of ${total}…`;
+  }
+  if (phase === "rules" && total) {
+    return `${processed} of ${total} resumes verified`;
+  }
+  return PHASE_LABELS[phase] || phase || "Working…";
+}
+
+function progressPercent(data) {
+  const total = data.total || 0;
+  const processed = data.processed || 0;
+  const phase = data.phase || "";
+
+  if (data.status === "completed") return 100;
+  if (!total) return 8;
+
+  if (phase === "download") {
+    return Math.min(35, Math.round((processed / total) * 35));
+  }
+  if (phase === "links") {
+    const next = Math.min((data.processed || 0) + 1, data.total || 0);
+    return Math.min(38, 10 + next * 25 / Math.max(data.total || 1, 1));
+  }
+  if (phase === "rules") {
+    return 40 + Math.round((processed / total) * 55);
+  }
+  if (phase === "report") return 98;
+  return Math.round((processed / total) * 100);
+}
+
+function liveCountLabel(data) {
+  const total = data.total || 0;
+  const processed = data.processed || 0;
+  const done = data.outcomes_summary?.length || 0;
+  const phase = data.phase || "";
+
+  if (data.status === "completed") {
+    return `${done} of ${total} resumes verified`;
+  }
+  if (phase === "download" && total) {
+    const next = Math.min(processed + 1, total);
+    return `${next} of ${total} — downloading from Drive`;
+  }
+  if (phase === "links" && total) {
+    const next = Math.min(processed + 1, total);
+    return `Checking links for resume ${next} of ${total}…`;
+  }
+  if (done > 0 && total) {
+    return `${done} of ${total} ready to review`;
+  }
+  if (total) {
+    return `0 of ${total} — starting…`;
+  }
+  return "Starting job…";
+}
+
+function updateLiveBanner(data) {
+  const banner = $("#resultsLiveBanner");
+  if (!banner) return;
+
+  const isLive = data.status === "running" || data.status === "queued";
+  if (!isLive && data.status !== "completed") {
+    banner.classList.add("hidden");
+    return;
+  }
+
+  banner.classList.remove("hidden");
+  banner.classList.toggle("complete", data.status === "completed");
+
+  const countEl = $("#liveBannerCount");
+  const phaseEl = $("#liveBannerPhase");
+  const bar = $("#liveBannerBar");
+
+  if (countEl) countEl.textContent = liveCountLabel(data);
+  if (phaseEl) {
+    phaseEl.textContent =
+      data.status === "completed"
+        ? "All resumes verified — Excel report is ready."
+        : phaseDetail(data);
+  }
+  if (bar) bar.style.width = `${progressPercent(data)}%`;
+}
+
+function liveEmptyTableMessage(data) {
+  const phase = data?.phase || "";
+  if (phase === "download") {
+    return "Downloading resumes from Google Drive — results will appear here as each one is verified.";
+  }
+  if (phase === "links") {
+    return "Checking live links across the batch — this can take a while. Results will stream in once verification starts.";
+  }
+  if (phase === "report") {
+    return "Building Excel report…";
+  }
+  return "Waiting for first resume to finish…";
+}
+
+function showLiveResults(data) {
+  state.currentJobId = data.id;
+  state.currentJobData = data;
+  state.liveProcessing = data.status === "running" || data.status === "queued";
+  state.processingJobId = state.liveProcessing ? data.id : null;
+
+  if (data.outcomes_summary?.length) {
+    cacheJobResults(data);
+  }
+
+  const path = pathForView("results", data.id);
+  if (window.location.pathname !== path) {
+    navigateTo("results", data.id);
+  } else {
+    showView("results");
+  }
+
+  renderResultsPage(data, { live: state.liveProcessing });
+  setProgress(progressPercent(data), phaseDetail(data));
+}
+
 async function pollJob(jobId) {
   const res = await fetch(`/api/jobs/${jobId}`);
   if (!res.ok) {
+    state.liveProcessing = false;
     setProgress(0, "Job not found.");
     $("#submitBtn").disabled = false;
     return;
   }
   const data = await res.json();
-  state.currentJobData = data;
-  cacheJobResults(data);
-
-  const pct = data.total ? Math.round((data.processed / data.total) * 100) : 0;
 
   if (data.status === "running" || data.status === "queued") {
-    setProgress(pct, `Processing… ${data.processed}/${data.total} (${data.phase})`);
-    state.pollTimer = setTimeout(() => pollJob(jobId), 1500);
+    if (data.processed !== state.lastPollProcessed) {
+      state.lastPollProcessed = data.processed;
+      state.lastProgressAt = Date.now();
+    } else if (
+      state.lastProgressAt &&
+      Date.now() - state.lastProgressAt > 120000
+    ) {
+      const phaseEl = $("#liveBannerPhase");
+      if (phaseEl) {
+        phaseEl.textContent =
+          "No progress for 2+ minutes — server may have restarted. Stop and run a new job (without --reload for big batches).";
+      }
+    }
+    showLiveResults(data);
+    state.pollTimer = setTimeout(() => pollJob(jobId), 1000);
     return;
   }
 
   if (data.status === "failed") {
-    setProgress(0, `Failed: ${data.error}`);
+    state.liveProcessing = false;
+    state.processingJobId = null;
     $("#submitBtn").disabled = false;
+    $("#newVerificationBtn").disabled = false;
+    if (data.outcomes_summary?.length) {
+      cacheJobResults(data);
+      renderResultsPage(data, { live: false });
+      $("#resultsTitle").textContent = "Verification stopped (partial results)";
+    }
+    setProgress(0, data.error || "Job failed");
+    showLiveResults({ ...data, phase: "error" });
+    const phaseEl = $("#liveBannerPhase");
+    if (phaseEl) phaseEl.textContent = data.error || "Job failed";
     saveRecentJob({
       id: jobId,
       method: state.uploadMethod,
       status: "failed",
       total: data.total,
       created_at: data.created_at,
+      outcomes_summary: data.outcomes_summary,
     });
     renderHistoryTable();
     return;
   }
 
   if (data.status === "completed") {
+    state.liveProcessing = false;
+    state.processingJobId = null;
+    cacheJobResults(data);
+    renderResultsPage(data, { live: false });
     setProgress(100, "Verification complete.");
     $("#submitBtn").disabled = false;
+    $("#newVerificationBtn").disabled = false;
     saveRecentJob({
       id: jobId,
       method: state.uploadMethod,
@@ -322,7 +495,6 @@ async function pollJob(jobId) {
     if (document.getElementById("view-history").classList.contains("active")) {
       renderHistoryTable();
     }
-    showResults(data);
   }
 }
 
@@ -338,14 +510,27 @@ function computeStats(summary) {
   return { total: summary.length, pass, review, error };
 }
 
-function renderResultsPage(data) {
-  $("#resultsTitle").textContent = "Verification Complete";
-  $("#resultsSubtitle").textContent = `Job ID: ${shortJobId(data.id)} • ${formatJobTime(data.created_at)}`;
+function renderResultsPage(data, options = {}) {
+  const isLive = options.live ?? false;
+  state.liveProcessing = isLive;
+
+  if (isLive) {
+    $("#resultsTitle").textContent = "Live verification";
+    $("#resultsSubtitle").textContent = `Job ${shortJobId(data.id)} — review results as they finish`;
+    $("#resultsLiveBanner").classList.remove("hidden");
+    $("#newVerificationBtn").disabled = true;
+  } else {
+    $("#resultsTitle").textContent = "Verification complete";
+    $("#resultsSubtitle").textContent = `Job ID: ${shortJobId(data.id)} • ${formatJobTime(data.created_at)}`;
+    const banner = $("#resultsLiveBanner");
+    if (banner) banner.classList.add("hidden");
+    $("#newVerificationBtn").disabled = false;
+  }
 
   const summary = data.outcomes_summary || [];
   const stats = computeStats(summary);
 
-  $("#statTotal").textContent = stats.total;
+  $("#statTotal").textContent = isLive && data.total ? data.total : stats.total;
   $("#statPass").textContent = stats.pass;
   $("#statReview").textContent = stats.review;
   $("#statError").textContent = stats.error;
@@ -353,42 +538,124 @@ function renderResultsPage(data) {
   const downloadBtn = $("#downloadExcelBtn");
   downloadBtn.disabled = !data.report_ready;
 
-  renderResultsTable(summary, $("#resultFilter").value);
+  if (!isLive) {
+    state.resultsPage = 1;
+  }
+
+  updateLiveBanner(data);
+  renderResultsTable(summary, $("#resultFilter").value, data);
 }
 
 function showResults(data) {
   state.currentJobId = data.id;
   state.currentJobData = data;
+  state.liveProcessing = false;
   cacheJobResults(data);
   navigateTo("results", data.id);
-  renderResultsPage(data);
+  renderResultsPage(data, { live: false });
 }
 
-function renderResultsTable(summary, filter) {
-  const tbody = $("#resultsTableBody");
-  let rows = summary;
-  if (filter === "PASS") rows = summary.filter((o) => o.verdict === "PASS");
-  else if (filter === "REVIEW") rows = summary.filter((o) => o.verdict !== "PASS");
-  else if (filter === "ERROR") rows = summary.filter((o) => o.hard_fails > 0);
+function filterResultRows(summary, filter) {
+  if (filter === "PASS") return summary.filter((o) => o.verdict === "PASS");
+  if (filter === "REVIEW") return summary.filter((o) => o.verdict !== "PASS");
+  if (filter === "ERROR") return summary.filter((o) => o.hard_fails > 0);
+  return summary;
+}
 
-  tbody.innerHTML = rows
+function renderResultsPagination(totalPages, currentPage) {
+  const container = $("#tablePagination");
+  if (!container) return;
+
+  if (totalPages <= 1) {
+    container.innerHTML = "";
+    container.classList.add("hidden");
+    return;
+  }
+
+  container.classList.remove("hidden");
+  const filtered = filterResultRows(
+    state.currentJobData?.outcomes_summary || [],
+    $("#resultFilter").value,
+  ).length;
+  const start = (currentPage - 1) * RESULTS_PAGE_SIZE + 1;
+  const end = Math.min(currentPage * RESULTS_PAGE_SIZE, filtered);
+  container.innerHTML = `
+    <button type="button" class="pagination-btn" id="resultsPrevPage" ${currentPage <= 1 ? "disabled" : ""}>Previous</button>
+    <span class="pagination-meta">${start}–${end} · Page ${currentPage} of ${totalPages}</span>
+    <button type="button" class="pagination-btn" id="resultsNextPage" ${currentPage >= totalPages ? "disabled" : ""}>Next</button>
+  `;
+
+  const prev = $("#resultsPrevPage");
+  const next = $("#resultsNextPage");
+  if (prev) {
+    prev.addEventListener("click", () => {
+      if (state.resultsPage > 1) {
+        state.resultsPage -= 1;
+        renderResultsTable(state.currentJobData.outcomes_summary, $("#resultFilter").value);
+      }
+    });
+  }
+  if (next) {
+    next.addEventListener("click", () => {
+      if (state.resultsPage < totalPages) {
+        state.resultsPage += 1;
+        renderResultsTable(state.currentJobData.outcomes_summary, $("#resultFilter").value);
+      }
+    });
+  }
+}
+
+function renderResultsTable(summary, filter, jobData = null) {
+  const tbody = $("#resultsTableBody");
+  const rows = filterResultRows(summary, filter);
+  const totalFiltered = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / RESULTS_PAGE_SIZE));
+
+  if (state.resultsPage > totalPages) state.resultsPage = totalPages;
+  if (state.resultsPage < 1) state.resultsPage = 1;
+
+  const start = (state.resultsPage - 1) * RESULTS_PAGE_SIZE;
+  const end = Math.min(start + RESULTS_PAGE_SIZE, totalFiltered);
+  const pageRows = rows.slice(start, end);
+
+  if (!pageRows.length) {
+    const emptyMsg = state.liveProcessing
+      ? liveEmptyTableMessage(jobData || state.currentJobData)
+      : "No entries match this filter.";
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);padding:1rem">${emptyMsg}</td></tr>`;
+    $("#tableShowing").textContent = state.liveProcessing
+      ? "Waiting for results…"
+      : "Showing 0 entries";
+    renderResultsPagination(1, 1);
+    return;
+  }
+
+  tbody.innerHTML = pageRows
     .map((o, idx) => {
+      const rowIdx = start + idx;
       const badgeClass =
         o.verdict === "PASS" ? "badge-pass" : o.hard_fails > 0 ? "badge-review" : "badge-review";
       const badgeLabel = o.verdict === "PASS" ? "PASS" : "REVIEW";
       const issues = formatIssues(o);
       const issuesClass = o.verdict === "PASS" ? "issues-cell muted" : "issues-cell";
+      const pdfLink = o.resume_url
+        ? `<a href="${o.resume_url}" target="_blank" rel="noopener" class="link-action">View PDF</a> · `
+        : "";
       return `<tr>
         <td>${o.name || "—"}</td>
         <td>${o.roll_number || "—"}</td>
         <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
         <td class="${issuesClass}">${issues}</td>
-        <td><button type="button" class="link-action" data-issue-idx="${idx}">Details</button></td>
+        <td>${pdfLink}<button type="button" class="link-action" data-issue-idx="${rowIdx}">Details</button></td>
       </tr>`;
     })
     .join("");
 
-  $("#tableShowing").textContent = `Showing 1 to ${rows.length} of ${summary.length} entries`;
+  const showingText = `Showing ${start + 1}–${end} of ${totalFiltered}`;
+  $("#tableShowing").textContent = state.liveProcessing
+    ? `${showingText} (more arriving as they finish)`
+    : showingText;
+  renderResultsPagination(totalPages, state.resultsPage);
 
   tbody.querySelectorAll("[data-issue-idx]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -525,22 +792,28 @@ async function runVerification() {
 
   let res;
 
-  if (formsCsv) {
-    state.uploadMethod = "forms";
-    const form = new FormData();
-    form.append("form_csv", formsCsv);
-    res = await fetch(`/api/batch/forms-csv?check_links=${checkLinks}`, { method: "POST", body: form });
-  } else {
-    const form = new FormData();
-    if (bundle) {
-      state.uploadMethod = "zip";
-      form.append("bundle", bundle);
+  try {
+    if (formsCsv) {
+      state.uploadMethod = "forms";
+      const form = new FormData();
+      form.append("form_csv", formsCsv);
+      res = await fetch(`/api/batch/forms-csv?check_links=${checkLinks}`, { method: "POST", body: form });
     } else {
-      state.uploadMethod = "direct";
-      for (const f of pdfs) form.append("resumes", f);
-      if (meta) form.append("metadata", meta);
+      const form = new FormData();
+      if (bundle) {
+        state.uploadMethod = "zip";
+        form.append("bundle", bundle);
+      } else {
+        state.uploadMethod = "direct";
+        for (const f of pdfs) form.append("resumes", f);
+        if (meta) form.append("metadata", meta);
+      }
+      res = await fetch(`/api/batch?check_links=${checkLinks}`, { method: "POST", body: form });
     }
-    res = await fetch(`/api/batch?check_links=${checkLinks}`, { method: "POST", body: form });
+  } catch {
+    setProgress(0, "Upload failed — check your connection.");
+    $("#submitBtn").disabled = false;
+    return;
   }
 
   if (!res.ok) {
@@ -550,8 +823,26 @@ async function runVerification() {
     return;
   }
 
-  const { job_id } = await res.json();
+  const { job_id, total } = await res.json();
   state.currentJobId = job_id;
+  state.processingJobId = job_id;
+  state.lastPollProcessed = -1;
+  state.lastProgressAt = Date.now();
+  state.liveProcessing = true;
+
+  $("#newVerificationBtn").disabled = true;
+
+  const placeholder = {
+    id: job_id,
+    status: "queued",
+    total: total || 0,
+    processed: 0,
+    phase: "queued",
+    outcomes_summary: [],
+    report_ready: false,
+    created_at: new Date().toISOString(),
+  };
+  showLiveResults(placeholder);
   setProgress(10, "Job queued…");
   pollJob(job_id);
 }
@@ -574,6 +865,7 @@ function init() {
   $("#submitBtn").addEventListener("click", runVerification);
   $("#clearHistoryBtn").addEventListener("click", clearHistory);
   $("#newVerificationBtn").addEventListener("click", () => {
+    if (state.liveProcessing) return;
     navigateTo("dashboard");
     $("#progressWrap").classList.add("hidden");
     setProgress(0, "");
@@ -582,6 +874,7 @@ function init() {
     if (state.currentJobId) window.location.href = `/api/jobs/${state.currentJobId}/report`;
   });
   $("#resultFilter").addEventListener("change", () => {
+    state.resultsPage = 1;
     if (state.currentJobData?.outcomes_summary) {
       renderResultsTable(state.currentJobData.outcomes_summary, $("#resultFilter").value);
     }

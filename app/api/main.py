@@ -12,7 +12,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.jobs import JobStatus, job_store
+from app.api.jobs import JobStatus, job_store, mark_stale_running_jobs
 from app.bundle import extract_zip_bundle, resolve_pdfs_from_metadata
 from app.report.exporter import export_report_csv_zip, export_report_xlsx
 from app.form_csv import load_form_csv
@@ -28,8 +28,36 @@ UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="ResumeVerify", version="0.1.0")
 
 
+@app.on_event("startup")
+def _startup_mark_stale_jobs() -> None:
+    mark_stale_running_jobs()
+
+
 def _outcome_issues(outcome) -> list[dict[str, str]]:
     return failures_to_json_records(outcome.evaluation.results, outcome.doc)
+
+
+def _resume_rel_path(work_dir: Path, pdf_path: Path) -> str:
+    try:
+        return pdf_path.resolve().relative_to(work_dir.resolve()).as_posix()
+    except ValueError:
+        return pdf_path.name
+
+
+def _outcome_summary_entry(job_id: str, work_dir: Path, outcome) -> dict:
+    resume_file = _resume_rel_path(work_dir, outcome.path)
+    return {
+        "filename": outcome.filename,
+        "roll_number": outcome.roll_number,
+        "name": outcome.name,
+        "verdict": outcome.evaluation.verdict.value,
+        "failed_rules": outcome.evaluation.failed_rules(),
+        "hard_fails": outcome.evaluation.hard_fail_count,
+        "soft_flags": outcome.evaluation.soft_flag_count,
+        "issues": _outcome_issues(outcome),
+        "resume_file": resume_file,
+        "resume_url": f"/api/jobs/{job_id}/resume/{resume_file}",
+    }
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -71,10 +99,21 @@ async def _run_batch_job(
     work_dir: Path,
     check_links: bool,
 ) -> None:
-    job_store.update(job_id, status=JobStatus.RUNNING, phase="extract")
+    job_store.update(job_id, status=JobStatus.RUNNING, phase="prepare", work_dir=work_dir)
+
+    partial_summary: list[dict] = []
 
     def on_progress(processed: int, total: int, phase: str) -> None:
         job_store.update(job_id, processed=processed, phase=phase)
+
+    def on_outcome(outcome, processed: int, total: int) -> None:
+        partial_summary.append(_outcome_summary_entry(job_id, work_dir, outcome))
+        job_store.update(
+            job_id,
+            processed=processed,
+            phase="rules",
+            outcomes_summary=list(partial_summary),
+        )
 
     try:
         outcomes = await verify_batch_async(
@@ -82,24 +121,16 @@ async def _run_batch_job(
             metadata_path=metadata_path,
             check_links=check_links,
             progress_callback=on_progress,
+            outcome_callback=on_outcome,
         )
 
+        job_store.update(job_id, phase="report")
         report_path = work_dir / "results.xlsx"
         export_report_xlsx(outcomes, report_path)
         export_report_csv_zip(outcomes, work_dir / "results_csv.zip")
 
         summary = [
-            {
-                "filename": o.filename,
-                "roll_number": o.roll_number,
-                "name": o.name,
-                "verdict": o.evaluation.verdict.value,
-                "failed_rules": o.evaluation.failed_rules(),
-                "hard_fails": o.evaluation.hard_fail_count,
-                "soft_flags": o.evaluation.soft_flag_count,
-                "issues": _outcome_issues(o),
-            }
-            for o in outcomes
+            _outcome_summary_entry(job_id, work_dir, o) for o in outcomes
         ]
 
         job_store.update(
@@ -109,6 +140,7 @@ async def _run_batch_job(
             phase="done",
             report_path=report_path,
             report_csv_zip_path=work_dir / "results_csv.zip",
+            work_dir=work_dir,
             outcomes_summary=summary,
         )
     except Exception as exc:
@@ -126,10 +158,21 @@ async def _run_forms_csv_job(
     work_dir: Path,
     check_links: bool,
 ) -> None:
-    job_store.update(job_id, status=JobStatus.RUNNING, phase="download")
+    job_store.update(job_id, status=JobStatus.RUNNING, phase="download", work_dir=work_dir)
+
+    partial_summary: list[dict] = []
 
     def on_progress(processed: int, total: int, phase: str) -> None:
         job_store.update(job_id, processed=processed, phase=phase)
+
+    def on_outcome(outcome, processed: int, total: int) -> None:
+        partial_summary.append(_outcome_summary_entry(job_id, work_dir, outcome))
+        job_store.update(
+            job_id,
+            processed=processed,
+            phase="rules",
+            outcomes_summary=list(partial_summary),
+        )
 
     try:
         outcomes, report_path, csv_zip = await process_form_csv_async(
@@ -137,19 +180,10 @@ async def _run_forms_csv_job(
             work_dir,
             check_links=check_links,
             progress_callback=on_progress,
+            outcome_callback=on_outcome,
         )
         summary = [
-            {
-                "filename": o.filename,
-                "roll_number": o.roll_number,
-                "name": o.name,
-                "verdict": o.evaluation.verdict.value,
-                "failed_rules": o.evaluation.failed_rules(),
-                "hard_fails": o.evaluation.hard_fail_count,
-                "soft_flags": o.evaluation.soft_flag_count,
-                "issues": _outcome_issues(o),
-            }
-            for o in outcomes
+            _outcome_summary_entry(job_id, work_dir, o) for o in outcomes
         ]
         job_store.update(
             job_id,
@@ -158,6 +192,7 @@ async def _run_forms_csv_job(
             phase="done",
             report_path=report_path,
             report_csv_zip_path=csv_zip,
+            work_dir=work_dir,
             outcomes_summary=summary,
         )
     except Exception as exc:
@@ -202,8 +237,9 @@ async def create_batch_from_forms_csv(
     )
     return {
         "job_id": job.id,
+        "total": job.total,
         "status": job.status.value,
-        "message": "Downloading resumes from Google Drive, then verifying",
+        "message": "Downloading and verifying each resume one by one",
     }
 
 
@@ -318,6 +354,24 @@ async def get_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.to_dict()
+
+
+@app.get("/api/jobs/{job_id}/resume/{resume_path:path}")
+async def download_resume_pdf(job_id: str, resume_path: str) -> FileResponse:
+    job = job_store.get(job_id)
+    if not job or not job.work_dir:
+        raise HTTPException(status_code=404, detail="Job not found")
+    base = Path(job.work_dir).resolve()
+    target = (base / resume_path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Invalid path")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Resume PDF not found")
+    return FileResponse(
+        target,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{target.name}"'},
+    )
 
 
 @app.get("/api/jobs/{job_id}/report")

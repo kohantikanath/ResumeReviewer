@@ -395,9 +395,41 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   padding: 0.75rem 0 0;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.table-pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pagination-btn {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: var(--primary-light);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pagination-meta {
+  font-weight: 500;
+  color: var(--text);
 }
 
 .link-action {
@@ -441,6 +473,81 @@ a:hover { text-decoration: underline; }
   font-size: 0.875rem;
   color: var(--text-muted);
   margin-top: 0.75rem;
+}
+
+/* Live results banner (review while batch runs) */
+.live-banner {
+  margin-bottom: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  border-color: var(--primary-light);
+  background: linear-gradient(135deg, #f8fafc 0%, var(--primary-light) 120%);
+}
+
+.live-banner.complete {
+  border-color: rgba(22, 163, 74, 0.35);
+  background: linear-gradient(135deg, #f0fdf4 0%, #fff 100%);
+}
+
+.live-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.processing-spinner-sm {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  flex-shrink: 0;
+  border-width: 2px;
+}
+
+.live-banner.complete .processing-spinner-sm {
+  display: none;
+}
+
+.live-banner-text strong {
+  display: block;
+  font-size: 1.125rem;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-banner.complete .live-banner-text strong {
+  color: var(--success);
+}
+
+.live-banner-text p {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin: 0.2rem 0 0;
+}
+
+.live-banner-bar {
+  margin: 0 0 0.5rem;
+  height: 6px;
+}
+
+.live-banner-hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.processing-spinner {
+  border: 3px solid var(--border-light);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.live-banner.complete .live-banner-hint {
+  color: var(--success);
 }
 
 /* Docs */

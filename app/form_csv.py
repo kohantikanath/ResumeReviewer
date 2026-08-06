@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,10 +119,15 @@ def load_form_csv(path: Path) -> list[FormApplication]:
 async def download_form_resumes(
     applications: list[FormApplication],
     dest_dir: Path,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[FormApplication]:
     dest_dir = Path(dest_dir)
     items = [(app.resume_url, app.name or app.email or "resume") for app in applications]
-    downloaded = await download_google_drive_pdfs(items, dest_dir)
+    downloaded = await download_google_drive_pdfs(
+        items,
+        dest_dir,
+        progress_callback=progress_callback,
+    )
 
     url_to_path = {url: path for url, path in downloaded}
     ready: list[FormApplication] = []
@@ -133,16 +139,19 @@ async def download_form_resumes(
     return ready
 
 
-def metadata_from_applications(applications: list[FormApplication]) -> dict[str, dict]:
-    """Metadata keyed by roll number (or email if no roll)."""
+def metadata_dict_from_applications(
+    applications: list[FormApplication],
+) -> dict[str, dict]:
+    """Metadata keyed by roll / email — same shape as load_metadata()."""
     rows: dict[str, dict] = {}
     for app in applications:
-        if not app.local_pdf:
-            continue
-        record = app.metadata_record(app.local_pdf.name)
-        key = app.roll_number or app.email.lower()
-        if key and key != "nan":
-            rows[key] = record
+        record = app.metadata_record("")
+        roll = (app.roll_number or "").strip().lower()
+        if roll and roll != "nan":
+            rows[roll] = record
+        email = (app.email or "").strip().lower()
+        if email and email != "nan":
+            rows[email] = record
     return rows
 
 
