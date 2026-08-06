@@ -17,6 +17,7 @@ from app.bundle import extract_zip_bundle, resolve_pdfs_from_metadata
 from app.report.exporter import export_report_csv_zip, export_report_xlsx
 from app.form_csv import load_form_csv
 from app.form_pipeline import process_form_csv_async
+from app.rules.reasons import failures_to_json_records
 from app.verify import verify_batch_async
 
 APP_ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +26,10 @@ UPLOAD_ROOT = APP_ROOT.parent / "uploads"
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="ResumeVerify", version="0.1.0")
+
+
+def _outcome_issues(outcome) -> list[dict[str, str]]:
+    return failures_to_json_records(outcome.evaluation.results, outcome.doc)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -77,6 +82,9 @@ async def _run_batch_job(
                 "name": o.name,
                 "verdict": o.evaluation.verdict.value,
                 "failed_rules": o.evaluation.failed_rules(),
+                "hard_fails": o.evaluation.hard_fail_count,
+                "soft_flags": o.evaluation.soft_flag_count,
+                "issues": _outcome_issues(o),
             }
             for o in outcomes
         ]
@@ -124,6 +132,9 @@ async def _run_forms_csv_job(
                 "name": o.name,
                 "verdict": o.evaluation.verdict.value,
                 "failed_rules": o.evaluation.failed_rules(),
+                "hard_fails": o.evaluation.hard_fail_count,
+                "soft_flags": o.evaluation.soft_flag_count,
+                "issues": _outcome_issues(o),
             }
             for o in outcomes
         ]
@@ -253,6 +264,25 @@ async def create_batch(
     )
 
     return {"job_id": job.id, "total": job.total, "status": job.status.value}
+
+
+@app.get("/api/jobs")
+async def list_jobs(limit: int = Query(20, ge=1, le=100)) -> dict:
+    jobs = job_store.list_recent(limit)
+    return {
+        "jobs": [
+            {
+                "id": j.id,
+                "status": j.status.value,
+                "total": j.total,
+                "processed": j.processed,
+                "phase": j.phase,
+                "created_at": j.created_at,
+                "report_ready": bool(j.report_path),
+            }
+            for j in jobs
+        ]
+    }
 
 
 @app.get("/api/jobs/{job_id}")

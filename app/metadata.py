@@ -42,6 +42,7 @@ COLUMN_ALIASES: dict[str, str] = {
     "contact number": "Contact",
     "scaler cgpa": "Scaler CGPA",
     "scaler cgf": "Scaler CGPA",
+    "scaler cgr": "Scaler CGPA",
     "bits cgpa": "BITS CGPA",
     "timestamp": "Timestamp",
 }

@@ -4,19 +4,9 @@ import re
 from urllib.parse import urlparse
 
 from app.config import BOT_BLOCK_DOMAINS, PLACEHOLDER_URL_PATTERNS, UTM_PATTERN
-from app.extract.link_locate import find_link_for_url, format_link_location
+from app.extract.link_locate import describe_link_location, find_best_link_for_url
 from app.models import DocumentModel
 from app.rules.base import RuleResult, Severity
-
-
-def _extract_github_username(url: str) -> str | None:
-    m = re.search(r"github\.com/([^/?#]+)", url, re.I)
-    if not m:
-        return None
-    user = m.group(1)
-    if user.lower() in {"features", "topics", "orgs", "settings"}:
-        return None
-    return user.lower()
 
 
 def _all_urls(doc: DocumentModel) -> list[str]:
@@ -36,40 +26,80 @@ def _domain(url: str) -> str:
         return ""
 
 
-def _url_with_location(doc: DocumentModel, url: str, detail: str) -> str:
-    link = find_link_for_url(doc, url)
+def _failure_explanation(
+    url: str,
+    status: int | None,
+    note: str,
+    domain: str,
+) -> str:
+    if domain in BOT_BLOCK_DOMAINS and status in (403, 429, 999):
+        return (
+            f"automated check got HTTP {status} — {domain} blocks bots; "
+            "the profile usually still opens in a normal browser"
+        )
+    if note == "timeout":
+        return "request timed out — site may be slow or blocking automated checks"
+    if note in ("dns_failure", "connection_refused"):
+        return f"{note.replace('_', ' ')} — host may be down or URL is wrong"
+    if status == 404:
+        return (
+            "HTTP 404 Not Found — server says this exact URL does not exist "
+            "(open this URL in your browser to confirm)"
+        )
+    if status == 0:
+        return "could not connect to the server"
+    if status:
+        return f"HTTP {status}"
+    return note or "failed"
+
+
+def _link_failure_reason(
+    doc: DocumentModel,
+    url: str,
+    status: int | None,
+    note: str,
+) -> str:
+    link = find_best_link_for_url(doc, url, status)
+    domain = _domain(url)
+    failure = _failure_explanation(url, status, note, domain)
     if link:
-        loc = format_link_location(doc, link)
-        return f"{url} ({detail}) [{loc}]"
-    return f"{url} ({detail})"
+        line_no, section, anchor = describe_link_location(doc, link)
+        loc_parts = []
+        if line_no:
+            loc_parts.append(f"Line {line_no}")
+        if section:
+            loc_parts.append(section)
+        loc = " | ".join(loc_parts) if loc_parts else "unknown location"
+        label = f'"{anchor}"' if anchor else "link"
+        return f"URL {url} — {failure} at {loc}, anchor text {label}"
+    return f"URL {url} — {failure}"
 
 
 def check_static_link_rules(doc: DocumentModel) -> list[RuleResult]:
     results: list[RuleResult] = []
     urls = _all_urls(doc)
 
-    placeholder_fail = False
-    placeholder_evidence = ""
     placeholder_hits: list[str] = []
     for url in urls:
         for pattern in PLACEHOLDER_URL_PATTERNS:
             if pattern.search(url):
-                placeholder_fail = True
-                placeholder_hits.append(_url_with_location(doc, url, "placeholder"))
+                placeholder_hits.append(_link_failure_reason(doc, url, None, "placeholder"))
                 break
 
     results.append(
         RuleResult(
             rule_id="R501",
             severity=Severity.HARD,
-            passed=not placeholder_fail,
+            passed=not placeholder_hits,
             reason="Malformed or placeholder URL found",
             evidence="; ".join(placeholder_hits[:5]),
         )
     )
 
     utm_found = [u for u in urls if UTM_PATTERN.search(u)]
-    utm_evidence = "; ".join(_url_with_location(doc, u, "utm") for u in utm_found[:5])
+    utm_evidence = "; ".join(
+        _link_failure_reason(doc, u, None, "utm tracking params") for u in utm_found[:5]
+    )
     results.append(
         RuleResult(
             rule_id="R505",
@@ -80,36 +110,14 @@ def check_static_link_rules(doc: DocumentModel) -> list[RuleResult]:
         )
     )
 
-    header_github = None
-    for link in doc.header_links():
-        if "github.com" in link.uri.lower():
-            header_github = _extract_github_username(link.uri)
-            break
-
-    github_ok = True
-    github_evidence = ""
-    if header_github:
-        project_github_urls = [
-            u for u in urls if "github.com" in u.lower() and "/in/" not in u.lower()
-        ]
-        mismatches: list[str] = []
-        for url in project_github_urls:
-            user = _extract_github_username(url)
-            if user and user != header_github:
-                parts = url.lower().split("github.com/")
-                if len(parts) > 1 and "/" in parts[1]:
-                    if user != header_github:
-                        github_ok = False
-                        mismatches.append(_url_with_location(doc, url, f"user={user}"))
-        github_evidence = "; ".join(mismatches[:5])
-
+    # R504 disabled — GitHub/LeetCode/LinkedIn handles may differ from student name
     results.append(
         RuleResult(
             rule_id="R504",
             severity=Severity.HARD,
-            passed=github_ok,
-            reason="GitHub username in header does not match project repo links",
-            evidence=github_evidence,
+            passed=True,
+            reason="GitHub username consistency (not enforced)",
+            evidence="",
         )
     )
 
@@ -120,10 +128,11 @@ def network_link_results(
     doc: DocumentModel,
     url_statuses: dict[str, tuple[int | None, str]],
 ) -> list[RuleResult]:
-    """Build R502/R503 from pre-fetched URL status map."""
+    """One RuleResult per failed URL so reports cite the exact broken link."""
     urls = _all_urls(doc)
-    hard_failures: list[str] = []
-    soft_failures: list[str] = []
+    results: list[RuleResult] = []
+    hard_count = 0
+    soft_count = 0
 
     for url in urls:
         status, note = url_statuses.get(url, (None, "not checked"))
@@ -132,33 +141,67 @@ def network_link_results(
         if status is None:
             continue
 
-        detail = str(note or status)
-        located = _url_with_location(doc, url, detail)
+        is_hard = False
+        is_soft = False
 
         if status in (404, 0) or note in ("dns_failure", "connection_refused"):
             if domain in BOT_BLOCK_DOMAINS and status in (403, 429, 999):
-                soft_failures.append(located)
+                is_soft = True
             else:
-                hard_failures.append(located)
+                is_hard = True
         elif status in (403, 429, 999) or note == "timeout":
             if domain in BOT_BLOCK_DOMAINS or status in (403, 429, 999):
-                soft_failures.append(located)
+                is_soft = True
             else:
-                hard_failures.append(located)
+                is_hard = True
 
-    return [
-        RuleResult(
-            rule_id="R502",
-            severity=Severity.HARD,
-            passed=not hard_failures,
-            reason="Broken link (404, DNS failure, or connection refused)",
-            evidence="; ".join(hard_failures[:8]),
-        ),
-        RuleResult(
-            rule_id="R503",
-            severity=Severity.SOFT,
-            passed=not soft_failures,
-            reason="Link unverifiable due to bot-blocking or timeout — check manually",
-            evidence="; ".join(soft_failures[:8]),
-        ),
-    ]
+        if not is_hard and not is_soft:
+            continue
+
+        reason_text = _link_failure_reason(doc, url, status, note)
+        if is_hard:
+            hard_count += 1
+            results.append(
+                RuleResult(
+                    rule_id="R502",
+                    severity=Severity.HARD,
+                    passed=False,
+                    reason="Broken hyperlink",
+                    evidence=reason_text,
+                )
+            )
+        else:
+            soft_count += 1
+            results.append(
+                RuleResult(
+                    rule_id="R503",
+                    severity=Severity.SOFT,
+                    passed=False,
+                    reason="Unverifiable hyperlink",
+                    evidence=reason_text,
+                )
+            )
+
+    if hard_count == 0:
+        results.insert(
+            0,
+            RuleResult(
+                rule_id="R502",
+                severity=Severity.HARD,
+                passed=True,
+                reason="Broken hyperlink",
+                evidence="",
+            ),
+        )
+    if soft_count == 0:
+        results.append(
+            RuleResult(
+                rule_id="R503",
+                severity=Severity.SOFT,
+                passed=True,
+                reason="Unverifiable hyperlink",
+                evidence="",
+            ),
+        )
+
+    return results

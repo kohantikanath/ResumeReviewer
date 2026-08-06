@@ -51,6 +51,11 @@ def _roll_from_email(email: str) -> str:
     return match.group(0).lower() if match else ""
 
 
+def _normalize_header_key(raw: str) -> str:
+    """Normalize CSV header for alias lookup (Google Forms adds trailing colons)."""
+    return str(raw).strip().lstrip("\ufeff").lower().replace("_", " ").rstrip(":").strip()
+
+
 def load_form_csv(path: Path) -> list[FormApplication]:
     path = Path(path)
     if path.suffix.lower() in {".xlsx", ".xls"}:
@@ -63,9 +68,16 @@ def load_form_csv(path: Path) -> list[FormApplication]:
     renamed: dict[str, str] = {}
     for col in df.columns:
         raw = str(col).strip().lstrip("\ufeff")
-        key = raw.lower().replace("_", " ")
+        key = _normalize_header_key(raw)
         renamed[col] = merged_aliases.get(key, raw)
     df = df.rename(columns=renamed)
+
+    if "Resume" not in df.columns:
+        for col in df.columns:
+            sample = df[col].dropna().astype(str).head(8)
+            if any("drive.google.com" in value for value in sample):
+                df = df.rename(columns={col: "Resume"})
+                break
 
     if "Resume" not in df.columns:
         raise ValueError(
@@ -83,6 +95,8 @@ def load_form_csv(path: Path) -> list[FormApplication]:
 
         email = str(row.get("Email", "")).strip()
         name = str(row.get("Name", "")).strip()
+        if name.lower() == "nan":
+            name = ""
         applications.append(
             FormApplication(
                 name=name,

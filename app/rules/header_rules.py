@@ -187,18 +187,14 @@ def check_header_rules(doc: DocumentModel) -> list[RuleResult]:
 
     slug_ok = True
     slug_evidence = ""
-    if linkedin_urls and doc.header_name:
-        slug = _extract_linkedin_slug(linkedin_urls[0])
-        if slug and not _linkedin_slug_matches_name(slug, doc.header_name):
-            slug_ok = False
-            slug_evidence = f"slug={slug}, name={doc.header_name}"
+    # R307 not enforced — LinkedIn/GitHub/LeetCode profile names may differ from legal name
 
     results.append(
         RuleResult(
             rule_id="R307",
             severity=Severity.HARD,
-            passed=slug_ok,
-            reason="LinkedIn profile slug does not match student name",
+            passed=True,
+            reason="LinkedIn slug matches student name (not enforced)",
             evidence=slug_evidence,
         )
     )

@@ -33,6 +33,28 @@ def _safe_filename(name: str, file_id: str) -> str:
     return f"{base}_{file_id[:8]}.pdf"
 
 
+def _filename_from_content_disposition(header: str) -> str | None:
+    if not header:
+        return None
+    match = re.search(r"filename\*=UTF-8''([^;\s]+)", header, re.I)
+    if match:
+        from urllib.parse import unquote
+
+        return unquote(match.group(1))
+    match = re.search(r'filename="([^"]+)"', header)
+    if match:
+        return match.group(1)
+    match = re.search(r"filename=([^;\s]+)", header, re.I)
+    return match.group(1) if match else None
+
+
+def _sanitize_drive_filename(name: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*]', "", (name or "").strip())
+    if not cleaned.lower().endswith(".pdf"):
+        cleaned = f"{cleaned}.pdf"
+    return cleaned or "resume.pdf"
+
+
 async def download_google_drive_pdf(
     url: str,
     dest_dir: Path,
@@ -46,7 +68,6 @@ async def download_google_drive_pdf(
 
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / _safe_filename(preferred_name, file_id)
 
     base_url = "https://drive.google.com/uc?export=download&id=" + file_id
     response = await client.get(base_url, follow_redirects=True)
@@ -71,6 +92,14 @@ async def download_google_drive_pdf(
             f"Downloaded file is not a PDF (content-type={content_type}). "
             "Ensure the Drive link is shared as 'Anyone with the link'."
         )
+
+    original_name = _filename_from_content_disposition(
+        response.headers.get("content-disposition", "")
+    )
+    if original_name and original_name.lower().endswith(".pdf"):
+        dest = dest_dir / _sanitize_drive_filename(original_name)
+    else:
+        dest = dest_dir / _safe_filename(preferred_name, file_id)
 
     dest.write_bytes(response.content)
     return dest

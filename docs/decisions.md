@@ -44,7 +44,16 @@ Roll/id in filename must match metadata `Roll Number` (`23bcs10151` or `10335`),
 
 ## R104 — Name match
 
-Case-insensitive. `Pooja Talele` vs `POOJA TALELE` passes. Uses normalized lowercase comparison plus fuzzy token match.
+Case-insensitive. Partial names allowed from the **start**: `Kohantika` passes for `Kohantika Nath`; `Kohantikanath` passes (no space). **HARD fail** for truncations like `kohan` or `kohantikaN`. **SOFT fail** if only surname is shown (e.g. `Nath`). Each failure includes an explicit reason.
+
+LinkedIn, GitHub, and LeetCode profile handles are **not** checked against the student name (R307, R504 disabled).
+
+## Broken links (report)
+
+Summary **Failed Rules (JSON)** column lists every failure as JSON:
+`[{"rule_id":"R303","rule":"...","reason":"Found abc@gmail.com but required domain is @sst.scaler.com"}]`
+
+Details sheet has **Rule ID**, **Rule**, **Reason** (one row per failure). Each broken URL is its own R502/R503 row citing the exact URL, line, section, and anchor text (e.g. GitHub vs Live on the same line).
 
 ## Thresholds
 
@@ -70,7 +79,4 @@ Both SST CGR and BITS CGPA required when both colleges appear (all template resu
 - 404, DNS fail, connection refused → HARD (R502)
 - 403, 429, 999, timeout on bot-block domains (LinkedIn, Tracxn, etc.) → SOFT (R503)
 - Never hard-fail LinkedIn profile URLs on bot-block responses
-
-## Link log (report)
-
-**Link log** sheet lists only **failed** links (`hard_fail`, `soft`, `unknown`) — not URLs that returned OK. Each row includes URL, line/section/anchor text, status, and classification.
+- One report row per failed URL with exact URL, line, section, and anchor text

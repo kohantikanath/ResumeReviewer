@@ -9,10 +9,10 @@ from app.config import (
     FILENAME_PATTERN_NUMERIC_SST,
     MAX_FILE_BYTES,
     MIN_EXTRACTABLE_CHARS,
-    NAME_FUZZY_THRESHOLD,
 )
 from app.models import DocumentModel
 from app.rules.base import RuleResult, Severity
+from app.rules.name_match import NameMatchOutcome, evaluate_name_match
 
 try:
     from rapidfuzz import fuzz
@@ -25,22 +25,8 @@ def _normalize_name(name: str) -> str:
 
 
 def _names_match(meta_name: str, pdf_name: str) -> bool:
-    """Case-insensitive name match; ignores capitalization differences."""
-    a = _normalize_name(meta_name)
-    b = _normalize_name(pdf_name)
-    if not a or not b:
-        return True
-    if a == b:
-        return True
-    if a in b or b in a:
-        return True
-    if fuzz:
-        return max(
-            fuzz.token_sort_ratio(a, b),
-            fuzz.token_set_ratio(a, b),
-            fuzz.partial_ratio(a, b),
-        ) >= NAME_FUZZY_THRESHOLD
-    return a == b
+    """Legacy helper — use evaluate_name_match for severity-aware checks."""
+    return evaluate_name_match(meta_name, pdf_name).outcome == NameMatchOutcome.PASS
 
 
 def _filename_stem(filename: str) -> str:
@@ -93,6 +79,15 @@ def _parse_filename_roll(filename: str) -> tuple[bool, str, str]:
     return False, "", ""
 
 
+def _roll_in_download_filename(filename: str, meta_roll: str) -> bool:
+    """Drive downloads may rename files; roll embedded in stem still counts."""
+    if not meta_roll:
+        return False
+    stem = re.sub(r"[^a-z0-9]", "", _filename_stem(filename).lower())
+    roll = re.sub(r"[^a-z0-9]", "", meta_roll.lower())
+    return roll and roll in stem
+
+
 def check_file_rules(doc: DocumentModel, metadata_row: dict | None) -> list[RuleResult]:
     results: list[RuleResult] = []
 
@@ -122,28 +117,39 @@ def check_file_rules(doc: DocumentModel, metadata_row: dict | None) -> list[Rule
     # R103 — {Name}_{roll|id}_SST or portal compact formats; optional " - Display Name"
     calib = re.match(r"^(Good|Bad)\s+\d+\.pdf$", doc.filename, re.I)
     roll_in_meta = False
+    roll_in_download_name = False
     filename_ok = False
     superset_name_ok = False
     roll = ""
     evidence = doc.filename
+    meta_roll = ""
 
     if not calib:
         matched, _, roll = _parse_filename_roll(doc.filename)
         filename_ok = matched
-        if metadata_row and roll:
-            meta_roll = str(metadata_row.get("Roll Number", "")).strip().lower()
-            roll_in_meta = roll == meta_roll
         if metadata_row:
+            meta_roll = str(metadata_row.get("Roll Number", "")).strip().lower()
+            if roll and meta_roll:
+                roll_in_meta = roll == meta_roll
+            roll_in_download_name = _roll_in_download_filename(doc.filename, meta_roll)
             meta_name = str(metadata_row.get("Name", ""))
+            if meta_name.lower() == "nan":
+                meta_name = ""
             superset_name_ok = _filename_matches_student_name(
                 doc.filename, meta_name, doc.header_name
             )
         evidence = (
-            f"stem={_filename_stem(doc.filename)}, roll={roll}, "
-            f"roll_in_meta={roll_in_meta}, name_match={superset_name_ok}"
+            f"stem={_filename_stem(doc.filename)}, roll={roll}, meta_roll={meta_roll}, "
+            f"roll_in_meta={roll_in_meta}, roll_in_download={roll_in_download_name}, "
+            f"name_match={superset_name_ok}"
         )
 
-    r103_pass = calib is not None or (filename_ok and roll_in_meta) or superset_name_ok
+    r103_pass = (
+        calib is not None
+        or (filename_ok and roll_in_meta)
+        or superset_name_ok
+        or roll_in_download_name
+    )
 
     results.append(
         RuleResult(
@@ -155,24 +161,31 @@ def check_file_rules(doc: DocumentModel, metadata_row: dict | None) -> list[Rule
         )
     )
 
-    # R104 — case-insensitive; capitalization differences ignored
-    name_match = True
-    evidence = ""
+    # R104 — partial name match; surname-only = SOFT, truncation = HARD
+    name_passed = True
+    name_severity = Severity.SOFT
+    name_reason = "Name in PDF header does not match metadata"
+    name_evidence = ""
     if metadata_row and doc.header_name:
         meta_name = str(metadata_row.get("Name", ""))
-        name_match = _names_match(meta_name, doc.header_name)
-        evidence = (
-            f"pdf_name={doc.header_name}, meta_name={meta_name}, "
-            f"match={name_match}"
-        )
+        if meta_name.lower() == "nan":
+            meta_name = ""
+        if meta_name:
+            match = evaluate_name_match(meta_name, doc.header_name)
+            name_passed = match.outcome == NameMatchOutcome.PASS
+            name_evidence = match.reason
+            if match.outcome == NameMatchOutcome.HARD_FAIL:
+                name_severity = Severity.HARD
+            elif match.outcome == NameMatchOutcome.SOFT_FAIL:
+                name_severity = Severity.SOFT
 
     results.append(
         RuleResult(
             rule_id="R104",
-            severity=Severity.SOFT,
-            passed=name_match if metadata_row else True,
-            reason="Name in PDF header does not closely match metadata",
-            evidence=evidence,
+            severity=name_severity,
+            passed=name_passed if metadata_row else True,
+            reason=name_reason,
+            evidence=name_evidence,
         )
     )
 

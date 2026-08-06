@@ -47,6 +47,17 @@ def test_r103_bcs_roll_still_works():
     assert r103.passed
 
 
+def test_r103_drive_download_filename_with_roll_in_stem():
+    doc = extract_pdf(FIXTURES / "Good 1.pdf")
+    doc.filename = "swaim24bcs10335sstscalercom_1YoiulmS.pdf"
+    results = check_file_rules(
+        doc,
+        {"Roll Number": "24bcs10335", "Name": "Swaim Sahay", "Email": ""},
+    )
+    r103 = next(r for r in results if r.rule_id == "R103")
+    assert r103.passed
+
+
 def test_r103_superset_name_only_filename():
     doc = extract_pdf(FIXTURES / "Good 1.pdf")
     doc.filename = "Pooja_Talele.pdf"
