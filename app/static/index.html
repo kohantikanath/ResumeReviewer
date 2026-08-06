@@ -4,18 +4,42 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ResumeVerify</title>
-  <link rel="stylesheet" href="/static/css/app.css" />
+  <link rel="stylesheet" href="/static/css/app.css?v=3" />
 </head>
 <body>
+  <script>
+    (function () {
+      var path = (location.pathname || "").replace(/\/+$/, "") || "/";
+      if (path === "/student" || path.indexOf("/student/") === 0) {
+        document.body.classList.add("mode-student");
+      } else if (
+        path === "/admin/login" ||
+        path === "/dashboard" ||
+        path === "/history" ||
+        path === "/docs" ||
+        path === "/results" ||
+        path.indexOf("/results/") === 0
+      ) {
+        document.body.classList.add("mode-admin");
+      }
+    })();
+  </script>
   <div class="app-shell">
     <header class="top-nav">
-      <a href="/dashboard" class="logo" style="text-decoration:none">
+      <a href="/student" class="logo nav-student-only" style="text-decoration:none">
         <span class="logo-resume">Resume</span><span class="logo-verify">Verify</span>
       </a>
-      <ul class="nav-links">
+      <a href="/dashboard" class="logo nav-admin-only" style="text-decoration:none">
+        <span class="logo-resume">Resume</span><span class="logo-verify">Verify</span>
+      </a>
+      <ul class="nav-links nav-student-only">
+        <li><a href="/student" data-view="student" class="active">Check Resume</a></li>
+      </ul>
+      <ul class="nav-links nav-admin-only">
         <li><a href="/dashboard" data-view="dashboard" class="active">Dashboard</a></li>
         <li><a href="/history" data-view="history">History</a></li>
         <li><a href="/docs" data-view="docs">Docs</a></li>
+        <li><button type="button" id="adminLogoutBtn" class="nav-logout-btn">Sign out</button></li>
       </ul>
       <div class="api-status">
         <span class="status-dot" id="apiStatusDot"></span>
@@ -23,8 +47,63 @@
       </div>
     </header>
 
+    <!-- Management login -->
+    <section id="view-login" class="view">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Management Login</h1>
+          <p class="page-subtitle">Enter the placement team password to access batch verification.</p>
+        </div>
+      </div>
+      <div class="card" style="max-width:420px">
+        <form id="adminLoginForm">
+          <label class="option-label" for="adminPassword">Password</label>
+          <input id="adminPassword" type="password" class="login-input" autocomplete="current-password" required />
+          <p id="loginError" class="login-error hidden"></p>
+          <button type="submit" class="btn btn-primary" style="margin-top:1rem">Sign in</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Student: upload only (no history) -->
+    <section id="view-student" class="view">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Check Your Resume</h1>
+          <p class="upload-hint">Upload your PDF to verify formatting and links before submitting your Drive link on the placement form.</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="option-block">
+          <label class="option-label">Your resume PDF</label>
+          <div class="file-picker">
+            <input id="studentPdf" type="file" accept=".pdf" />
+            <div id="studentPdfChip" class="file-chip hidden">
+              <span id="studentPdfName"></span>
+              <button type="button" class="chip-clear" id="studentPdfClear" title="Remove">×</button>
+            </div>
+          </div>
+          <p class="option-desc">Filename must follow <code>{Name}_{roll}_SST.pdf</code>. We compare the name in the filename with the name at the top of your PDF.</p>
+        </div>
+        <div class="checkbox-row">
+          <input id="studentCheckLinks" type="checkbox" checked />
+          <label for="studentCheckLinks">Check live profile links (LinkedIn, GitHub, LeetCode)</label>
+        </div>
+        <div class="run-row">
+          <button type="button" id="studentSubmitBtn" class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+            Verify my resume
+          </button>
+        </div>
+        <div id="studentProgressWrap" class="hidden">
+          <div class="progress-bar-wrap"><div class="progress-bar" id="studentProgressBar"></div></div>
+          <p class="status-message" id="studentRunStatus"></p>
+        </div>
+      </div>
+    </section>
+
     <!-- Dashboard: New Verification -->
-    <section id="view-dashboard" class="view active">
+    <section id="view-dashboard" class="view">
       <div class="page-header">
         <div>
           <h1 class="page-title">New Verification Job</h1>
@@ -244,6 +323,7 @@
     <footer class="app-footer">
       <span>ResumeVerify v1.2.0 · Automated SST Compliance</span>
       <div class="footer-links">
+        <a href="/dashboard" class="staff-portal-link">Management portal</a>
         <a href="/docs" data-view="docs">Implementation Docs</a>
         <a href="https://github.com/kohantikanath/ResumeReviewer" target="_blank" rel="noopener">GitHub</a>
       </div>
@@ -258,6 +338,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=3"></script>
 </body>
 </html>

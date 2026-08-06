@@ -88,7 +88,63 @@ def _roll_in_download_filename(filename: str, meta_roll: str) -> bool:
     return roll and roll in stem
 
 
-def check_file_rules(doc: DocumentModel, metadata_row: dict | None) -> list[RuleResult]:
+def filename_display_name(filename: str) -> str:
+    matched, name_part, _ = _parse_filename_roll(filename)
+    if matched and name_part:
+        spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", name_part)
+        return spaced.replace("_", " ").strip()
+    return _filename_stem(filename).replace("_", " ").strip()
+
+
+def evaluate_filename_header_match(filename: str, header_name: str) -> NameMatchResult:
+    return evaluate_name_match(filename_display_name(filename), header_name)
+
+
+def _normalize_roll_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def _filename_roll_matches_pdf(
+    filename: str, pdf_roll: str, college_email: str = ""
+) -> tuple[bool, str]:
+    """Filename roll/id must agree with roll or email embedded in the PDF."""
+    matched, _, file_roll = _parse_filename_roll(filename)
+    if not matched or not file_roll:
+        return False, "could not parse roll/id from filename"
+
+    file_roll_norm = _normalize_roll_token(file_roll)
+    pdf_roll_norm = _normalize_roll_token(pdf_roll)
+    if not pdf_roll_norm:
+        return False, "no roll number found inside PDF"
+
+    stem = _filename_stem(filename)
+    if FILENAME_PATTERN_BCS_SST.match(stem) or FILENAME_PATTERN_BCS_ROLL.match(stem):
+        if file_roll_norm == pdf_roll_norm:
+            return True, ""
+        return (
+            False,
+            f"filename roll '{file_roll}' does not match PDF roll '{pdf_roll}'",
+        )
+
+    # Numeric Superset portal id — must appear inside the bcs roll or college email
+    if file_roll_norm and file_roll_norm in pdf_roll_norm:
+        return True, ""
+    if college_email:
+        email_local = _normalize_roll_token(college_email.split("@")[0])
+        if file_roll_norm and file_roll_norm in email_local:
+            return True, ""
+
+    return (
+        False,
+        f"filename id '{file_roll}' does not match PDF roll '{pdf_roll}'",
+    )
+
+
+def check_file_rules(
+    doc: DocumentModel,
+    metadata_row: dict | None,
+    student_self_check: bool = False,
+) -> list[RuleResult]:
     results: list[RuleResult] = []
 
     # R101
@@ -124,7 +180,7 @@ def check_file_rules(doc: DocumentModel, metadata_row: dict | None) -> list[Rule
     evidence = doc.filename
     meta_roll = ""
 
-    if not calib:
+    if not calib or student_self_check:
         matched, _, roll = _parse_filename_roll(doc.filename)
         filename_ok = matched
         if metadata_row:
@@ -138,25 +194,59 @@ def check_file_rules(doc: DocumentModel, metadata_row: dict | None) -> list[Rule
             superset_name_ok = _filename_matches_student_name(
                 doc.filename, meta_name, doc.header_name
             )
-        evidence = (
-            f"stem={_filename_stem(doc.filename)}, roll={roll}, meta_roll={meta_roll}, "
-            f"roll_in_meta={roll_in_meta}, roll_in_download={roll_in_download_name}, "
-            f"name_match={superset_name_ok}"
-        )
+        if not student_self_check:
+            evidence = (
+                f"stem={_filename_stem(doc.filename)}, roll={roll}, meta_roll={meta_roll}, "
+                f"roll_in_meta={roll_in_meta}, roll_in_download={roll_in_download_name}, "
+                f"name_match={superset_name_ok}"
+            )
 
-    r103_pass = (
-        calib is not None
-        or (filename_ok and roll_in_meta)
-        or superset_name_ok
-        or roll_in_download_name
-    )
+    if student_self_check and not metadata_row:
+        header_name_ok = _filename_matches_student_name(
+            doc.filename, doc.header_name, doc.header_name
+        )
+        pdf_roll = str(doc.metadata_derived.get("Roll Number", ""))
+        pdf_email = str(doc.metadata_derived.get("Email", ""))
+        roll_matches_pdf, roll_reason = _filename_roll_matches_pdf(
+            doc.filename, pdf_roll, pdf_email
+        )
+        r103_pass = filename_ok and header_name_ok and roll_matches_pdf
+        evidence = (
+            f"student_self_check stem={_filename_stem(doc.filename)}, "
+            f"pattern_ok={filename_ok}, header_name_ok={header_name_ok}, "
+            f"roll_in_pdf={pdf_roll}, roll_match={roll_matches_pdf}, {roll_reason}"
+        )
+        if not filename_ok:
+            r103_reason = (
+                f"Filename '{doc.filename}' does not follow {{Name}}_{{id}}_SST "
+                "(bcs roll or numeric portal id)"
+            )
+        elif not header_name_ok:
+            r103_reason = (
+                f"Name in filename does not match name at top of PDF "
+                f"('{filename_display_name(doc.filename)}' vs '{doc.header_name}')"
+            )
+        elif not roll_matches_pdf and roll_reason:
+            r103_reason = f"Filename roll/id does not match PDF: {roll_reason}"
+        else:
+            r103_reason = "Filename must match {Name}_{id}_SST (bcs roll or numeric portal id)"
+    elif calib is not None:
+        r103_pass = True
+        r103_reason = "Filename must match {Name}_{id}_SST (bcs roll or numeric portal id)"
+    else:
+        r103_pass = (
+            (filename_ok and roll_in_meta)
+            or superset_name_ok
+            or roll_in_download_name
+        )
+        r103_reason = "Filename must match {Name}_{id}_SST (bcs roll or numeric portal id)"
 
     results.append(
         RuleResult(
             rule_id="R103",
             severity=Severity.HARD,
             passed=r103_pass,
-            reason="Filename must match {Name}_{id}_SST (bcs roll or numeric portal id)",
+            reason=r103_reason,
             evidence=evidence,
         )
     )
@@ -166,24 +256,43 @@ def check_file_rules(doc: DocumentModel, metadata_row: dict | None) -> list[Rule
     name_severity = Severity.SOFT
     name_reason = "Name in PDF header does not match metadata"
     name_evidence = ""
-    if metadata_row and doc.header_name:
-        meta_name = str(metadata_row.get("Name", ""))
-        if meta_name.lower() == "nan":
-            meta_name = ""
-        if meta_name:
-            match = evaluate_name_match(meta_name, doc.header_name)
+    if student_self_check and not metadata_row and doc.header_name:
+        # R103 already checks filename vs PDF header; skip duplicate R104 when that failed
+        if not r103_pass and (not filename_ok or not header_name_ok):
+            name_passed = True
+            name_evidence = "Already reported under R103 (filename vs PDF header)"
+        else:
+            match = evaluate_filename_header_match(doc.filename, doc.header_name)
             name_passed = match.outcome == NameMatchOutcome.PASS
+            name_reason = "Filename name does not match name in PDF header"
             name_evidence = match.reason
             if match.outcome == NameMatchOutcome.HARD_FAIL:
                 name_severity = Severity.HARD
             elif match.outcome == NameMatchOutcome.SOFT_FAIL:
                 name_severity = Severity.SOFT
+    elif metadata_row and doc.header_name:
+        meta_name = str(metadata_row.get("Name", ""))
+        if meta_name.lower() == "nan":
+            meta_name = ""
+        if meta_name:
+            if not r103_pass:
+                # Filename/roll vs metadata already failed in R103 — avoid duplicate R104
+                name_passed = True
+                name_evidence = "Filename/name vs metadata covered by R103"
+            else:
+                match = evaluate_name_match(meta_name, doc.header_name)
+                name_passed = match.outcome == NameMatchOutcome.PASS
+                name_evidence = match.reason
+                if match.outcome == NameMatchOutcome.HARD_FAIL:
+                    name_severity = Severity.HARD
+                elif match.outcome == NameMatchOutcome.SOFT_FAIL:
+                    name_severity = Severity.SOFT
 
     results.append(
         RuleResult(
             rule_id="R104",
             severity=name_severity,
-            passed=name_passed if metadata_row else True,
+            passed=name_passed if metadata_row or student_self_check else True,
             reason=name_reason,
             evidence=name_evidence,
         )

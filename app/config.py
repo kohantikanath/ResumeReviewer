@@ -24,7 +24,9 @@ FILENAME_PATTERN = re.compile(
 FILENAME_PATTERN_ROLL = re.compile(
     r"^(.+)_(\d{2}bcs\d{5})\.pdf$", re.IGNORECASE
 )
-PHONE_PATTERN = re.compile(r"(?:\+91[\s-]?)?[6-9]\d{9}")
+PHONE_PATTERN = re.compile(
+    r"(?:\+91[\s.-]*)?(?<!\d)[6-9](?:[\s.-]*\d){9}(?!\d)"
+)
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MIN_EXTRACTABLE_CHARS = 200
 NAME_FUZZY_THRESHOLD = 85

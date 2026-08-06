@@ -63,9 +63,26 @@ def build_failure_reason(result: RuleResult, doc: DocumentModel | None = None) -
             return f"File size exceeds 10 MB limit ({ev})"
 
     if rid == "R103":
+        if result.reason and not result.reason.startswith("Filename must match"):
+            return result.reason
+        fn = doc.filename if doc else ev
+        if ev and "student_self_check" in ev:
+            parts: list[str] = []
+            if "pattern_ok=False" in ev:
+                parts.append(
+                    f"Filename '{fn}' does not follow {{Name}}_{{id}}_SST naming"
+                )
+            if "header_name_ok=False" in ev:
+                parts.append("name in filename does not match name at top of PDF")
+            if "roll_match=False" in ev:
+                roll_detail = ev.split("roll_match=False,", 1)[-1].strip()
+                if roll_detail:
+                    parts.append(roll_detail)
+            if parts:
+                return "; ".join(parts)
         return (
-            f"Filename '{doc.filename if doc else ev}' does not match required "
-            "pattern {Name}_{roll}_SST and roll was not found in metadata"
+            f"Filename '{fn}' does not match required pattern {{Name}}_{{roll}}_SST "
+            "and roll was not found in metadata"
         )
 
     if rid == "R104":

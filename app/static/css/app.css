@@ -207,7 +207,22 @@ a:hover { text-decoration: underline; }
   flex-wrap: wrap;
 }
 
-.file-picker input[type="file"] { font-size: 0.8rem; max-width: 100%; }
+.file-picker input[type="file"] {
+  font-size: 0.8rem;
+  max-width: 100%;
+  /* Hide native filename text; chip shows the selected name */
+  color: transparent;
+}
+
+.file-picker input[type="file"]::file-selector-button {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.file-picker input[type="file"]::-webkit-file-upload-button {
+  color: var(--text);
+  font-size: 0.8rem;
+}
 
 .file-chip {
   display: inline-flex;
@@ -235,6 +250,9 @@ a:hover { text-decoration: underline; }
   font-size: 1.1rem;
   line-height: 1;
   padding: 0 0.15rem;
+  flex-shrink: 0;
+  min-width: 1.25rem;
+  min-height: 1.25rem;
 }
 .chip-clear:hover { color: var(--error); }
 
@@ -625,4 +643,64 @@ a:hover { text-decoration: underline; }
 
 .modal-close {
   margin-top: 1rem;
+}
+
+body.mode-student .nav-admin-only,
+body.mode-student #view-dashboard,
+body.mode-student #view-history,
+body.mode-student #view-docs,
+body.mode-student #view-login,
+body.mode-student #downloadExcelBtn,
+body.mode-student .footer-links a[href="/docs"] {
+  display: none !important;
+}
+
+body.mode-admin #view-login {
+  display: none !important;
+}
+
+body.mode-admin .nav-student-only,
+body.mode-admin #view-student,
+body.mode-admin .staff-portal-link {
+  display: none !important;
+}
+
+body.show-login #view-dashboard,
+body.show-login #view-history,
+body.show-login #view-docs,
+body.show-login #view-results,
+body.show-login .nav-admin-only .nav-links {
+  display: none !important;
+}
+
+body.show-login #view-login {
+  display: block !important;
+}
+
+.login-input {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+}
+
+.login-error {
+  color: var(--error);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.nav-logout-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0.35rem 0.5rem;
+}
+
+.nav-logout-btn:hover {
+  color: var(--primary);
 }

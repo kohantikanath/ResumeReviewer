@@ -11,7 +11,7 @@ from app.links.validator import check_urls
 from app.metadata import load_metadata, match_metadata_row
 from app.models import DocumentModel
 from app.rules.base import EvaluationResult, run_all_rules
-from app.rules.link_rules import _all_urls, network_link_results
+from app.rules.link_rules import checkable_urls, network_link_results
 from app.types import VerificationOutcome
 
 
@@ -20,6 +20,7 @@ def _evaluate_doc(
     metadata: dict[str, dict] | None,
     link_statuses: dict[str, tuple[int | None, str]],
     check_links: bool,
+    student_self_check: bool = False,
 ) -> EvaluationResult:
     derived = derive_metadata(doc)
     meta_row = None
@@ -34,7 +35,12 @@ def _evaluate_doc(
     if check_links and link_statuses:
         link_rule_results = network_link_results(doc, link_statuses)
 
-    return run_all_rules(doc, meta_row, link_rule_results)
+    return run_all_rules(
+        doc,
+        meta_row,
+        link_rule_results,
+        student_self_check=student_self_check,
+    )
 
 
 async def verify_pdf_async(
@@ -43,12 +49,13 @@ async def verify_pdf_async(
     check_links: bool = True,
     url_cache: dict[str, tuple[int | None, str]] | None = None,
     vanity_cache: dict[str, tuple[int | None, str]] | None = None,
+    student_self_check: bool = False,
 ) -> VerificationOutcome:
     doc = await asyncio.to_thread(extract_pdf, pdf_path)
     link_statuses: dict[str, tuple[int | None, str]] = {}
 
     if check_links:
-        urls = _all_urls(doc)
+        urls = checkable_urls(doc)
         if urls:
             cache = url_cache if url_cache is not None else {}
             vcache = vanity_cache if vanity_cache is not None else {}
@@ -58,7 +65,13 @@ async def verify_pdf_async(
             if url_cache is not None:
                 url_cache.update(link_statuses)
 
-    evaluation = _evaluate_doc(doc, metadata, link_statuses, check_links)
+    evaluation = _evaluate_doc(
+        doc,
+        metadata,
+        link_statuses,
+        check_links,
+        student_self_check=student_self_check,
+    )
     return VerificationOutcome(
         path=pdf_path,
         doc=doc,
@@ -90,7 +103,7 @@ async def verify_batch_async(
 
     for index, path in enumerate(pdf_paths):
         doc = await asyncio.to_thread(extract_pdf, path)
-        doc_urls = _all_urls(doc)
+        doc_urls = checkable_urls(doc)
 
         if check_links and doc_urls:
             if progress_callback:

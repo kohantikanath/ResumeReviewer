@@ -72,6 +72,7 @@ def run_all_rules(
     doc: DocumentModel,
     metadata_row: dict | None = None,
     link_results: list[RuleResult] | None = None,
+    student_self_check: bool = False,
 ) -> EvaluationResult:
     from app.rules.document_rules import check_document_rules
     from app.rules.file_rules import check_file_rules
@@ -80,7 +81,9 @@ def run_all_rules(
     from app.rules.section_rules import check_section_rules
 
     results: list[RuleResult] = []
-    results.extend(check_file_rules(doc, metadata_row))
+    results.extend(
+        check_file_rules(doc, metadata_row, student_self_check=student_self_check)
+    )
     results.extend(check_document_rules(doc))
     results.extend(check_header_rules(doc))
     results.extend(check_section_rules(doc))

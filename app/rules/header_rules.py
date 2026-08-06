@@ -63,6 +63,40 @@ def _extract_github_username(url: str) -> str | None:
     return user
 
 
+def _indian_mobile_digits(digits: str) -> bool:
+    """True when digit string contains a valid 10-digit Indian mobile."""
+    if len(digits) < 10:
+        return False
+    for i in range(len(digits) - 9):
+        if digits[i] in "6789":
+            return True
+    if digits.startswith("91") and len(digits) >= 12 and digits[-10] in "6789":
+        return True
+    return False
+
+
+def _phone_in_text(text: str) -> bool:
+    if not text:
+        return False
+    if PHONE_PATTERN.search(text):
+        return True
+    return bool(re.search(r"(?<!\d)[6-9]\d{9}(?!\d)", text))
+
+
+def _phone_present(doc: DocumentModel) -> bool:
+    """Phone may appear as plain text or tel: link — link is optional."""
+    if _phone_in_text(doc.header_text()):
+        return True
+    if _phone_in_text(doc.full_text[:800]):
+        return True
+    for link in doc.header_links():
+        if link.uri.lower().startswith("tel:"):
+            digits = re.sub(r"\D", "", link.uri[4:])
+            if _indian_mobile_digits(digits):
+                return True
+    return False
+
+
 def check_header_rules(doc: DocumentModel) -> list[RuleResult]:
     results: list[RuleResult] = []
     header_text = doc.header_text()
@@ -78,9 +112,7 @@ def check_header_rules(doc: DocumentModel) -> list[RuleResult]:
         )
     )
 
-    phone_found = PHONE_PATTERN.search(header_text) or any(
-        l.uri.startswith("tel:") for l in header_links
-    )
+    phone_found = _phone_present(doc)
     results.append(
         RuleResult(
             rule_id="R302",

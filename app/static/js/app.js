@@ -4,6 +4,8 @@ const STORAGE_KEY = "rv_recent_jobs";
 const RESULTS_CACHE_KEY = "rv_job_results";
 
 const ROUTES = {
+  student: "/student",
+  login: "/admin/login",
   dashboard: "/dashboard",
   history: "/history",
   docs: "/docs",
@@ -13,6 +15,7 @@ const ROUTES = {
 const RESULTS_PAGE_SIZE = 5;
 
 const state = {
+  appMode: "admin",
   currentJobId: null,
   currentJobData: null,
   uploadMethod: null,
@@ -26,6 +29,29 @@ const state = {
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
+
+function isStudentMode() {
+  return state.appMode === "student";
+}
+
+function jobApiBase() {
+  return isStudentMode() ? "/api/student/jobs" : "/api/jobs";
+}
+
+function applyAppMode(mode) {
+  state.appMode = mode;
+  document.body.classList.toggle("mode-student", mode === "student");
+  document.body.classList.toggle("mode-admin", mode === "admin");
+}
+
+function adminViewMode(view) {
+  return view === "dashboard" || view === "history" || view === "docs";
+}
+
+function normalizePath(pathname) {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  return path;
+}
 
 function shortJobId(id) {
   if (!id) return "";
@@ -99,7 +125,7 @@ function bindJobViewLinks(root) {
 
 async function fetchJobData(jobId) {
   try {
-    const res = await fetch(`/api/jobs/${jobId}`);
+    const res = await fetch(`${jobApiBase()}/${jobId}`);
     if (res.ok) {
       const data = await res.json();
       cacheJobResults(data);
@@ -147,7 +173,7 @@ async function openJobResults(jobId) {
       "Could not load results for this job. Run verification again if the server was restarted before results were saved."
     );
     if (parsePath(window.location.pathname).view === "results") {
-      navigateTo("dashboard", null, true);
+      navigateTo(isStudentMode() ? "student" : "dashboard", null, true);
     }
     return false;
   }
@@ -161,30 +187,58 @@ async function openJobResults(jobId) {
 }
 
 function pathForView(view, jobId = null) {
-  if (view === "results" && jobId) return `/results/${jobId}`;
+  if (view === "results" && jobId) {
+    return isStudentMode() ? `/student/results/${jobId}` : `/results/${jobId}`;
+  }
+  if (view === "student") return ROUTES.student;
+  if (view === "login") return ROUTES.login;
   return ROUTES[view] || ROUTES.dashboard;
 }
 
 function parsePath(pathname) {
-  const resultsMatch = pathname.match(/^\/results\/([a-f0-9-]+)$/i);
-  if (resultsMatch) return { view: "results", jobId: resultsMatch[1] };
-  if (pathname === "/results") return { view: "results", jobId: null };
-  if (pathname === "/history") return { view: "history", jobId: null };
-  if (pathname === "/docs") return { view: "docs", jobId: null };
-  return { view: "dashboard", jobId: null };
+  const path = normalizePath(pathname);
+
+  const studentResults = path.match(/^\/student\/results\/([a-f0-9-]+)$/i);
+  if (studentResults) {
+    return { view: "results", jobId: studentResults[1], mode: "student" };
+  }
+  if (path === "/student") {
+    return { view: "student", jobId: null, mode: "student" };
+  }
+  if (path === "/admin/login") {
+    return { view: "login", jobId: null, mode: "admin" };
+  }
+
+  const resultsMatch = path.match(/^\/results\/([a-f0-9-]+)$/i);
+  if (resultsMatch) return { view: "results", jobId: resultsMatch[1], mode: "admin" };
+  if (path === "/results") return { view: "results", jobId: null, mode: "admin" };
+  if (path === "/history") return { view: "history", jobId: null, mode: "admin" };
+  if (path === "/docs") return { view: "docs", jobId: null, mode: "admin" };
+  if (path === "/dashboard") return { view: "dashboard", jobId: null, mode: "admin" };
+
+  return { view: "student", jobId: null, mode: "student" };
 }
 
 function showView(name) {
   $$(".view").forEach((v) => v.classList.remove("active"));
-  $$(".nav-links a").forEach((a) => a.classList.remove("active"));
+  const navRoot = isStudentMode() ? ".nav-student-only" : ".nav-admin-only";
+  document.querySelectorAll(`${navRoot} .nav-links a`).forEach((a) => a.classList.remove("active"));
   const view = document.getElementById(`view-${name}`);
   if (view) view.classList.add("active");
-  const nav = document.querySelector(`.nav-links a[data-view="${name}"]`);
+  const nav = document.querySelector(`${navRoot} .nav-links a[data-view="${name}"]`);
   if (nav) nav.classList.add("active");
   if (name === "history") renderHistoryTable();
 }
 
 function navigateTo(view, jobId = null, replace = false) {
+  const prevPath = parsePath(window.location.pathname);
+
+  if (view === "student") {
+    applyAppMode("student");
+  } else if (adminViewMode(view)) {
+    applyAppMode("admin");
+  }
+
   const path = pathForView(view, jobId);
   const stateObj = { view, jobId };
   if (replace) {
@@ -193,10 +247,30 @@ function navigateTo(view, jobId = null, replace = false) {
     history.pushState(stateObj, "", path);
   }
   showView(view);
+
+  if (
+    !jobId &&
+    !state.liveProcessing &&
+    prevPath.view === "results" &&
+    (view === "student" || view === "dashboard")
+  ) {
+    resetNewVerificationState();
+  }
 }
 
 async function loadRoute() {
-  const { view, jobId } = parsePath(window.location.pathname);
+  const { view, jobId, mode } = parsePath(window.location.pathname);
+  applyAppMode(mode);
+
+  if (mode === "admin" && view !== "login") {
+    const authed = await ensureAdminAuth();
+    if (!authed) return;
+  }
+
+  if (view === "login") {
+    showView("login");
+    return;
+  }
 
   if (view === "results" && jobId) {
     await openJobResults(jobId);
@@ -220,7 +294,54 @@ async function loadRoute() {
     return;
   }
 
+  if (view === "student") {
+    showView("student");
+    return;
+  }
+
   showView("dashboard");
+}
+
+async function ensureAdminAuth() {
+  try {
+    const res = await fetch("/api/admin/session");
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.authenticated) {
+      document.body.classList.remove("show-login");
+      return true;
+    }
+    document.body.classList.add("show-login");
+    navigateTo("login", null, true);
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function submitAdminLogin(password) {
+  const errEl = $("#loginError");
+  const formData = new FormData();
+  formData.append("password", password);
+  const res = await fetch("/api/admin/login", { method: "POST", body: formData });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    if (errEl) {
+      errEl.textContent = err.detail || "Login failed";
+      errEl.classList.remove("hidden");
+    }
+    return false;
+  }
+  document.body.classList.remove("show-login");
+  if (errEl) errEl.classList.add("hidden");
+  navigateTo("dashboard");
+  return true;
+}
+
+async function adminLogout() {
+  await fetch("/api/admin/logout", { method: "POST" }).catch(() => {});
+  document.body.classList.add("show-login");
+  navigateTo("login");
 }
 
 async function checkApiHealth() {
@@ -240,13 +361,20 @@ async function checkApiHealth() {
   }
 }
 
+const pickerRegistry = {};
+
 function wireFilePicker(inputId, chipId, nameId, multi = false) {
-  const input = document.getElementById(inputId);
   const chip = document.getElementById(chipId);
   const nameEl = document.getElementById(nameId);
   const clearBtn = document.getElementById(chipId.replace("Chip", "Clear"));
 
+  function getInput() {
+    return document.getElementById(inputId);
+  }
+
   function update() {
+    const input = getInput();
+    if (!input) return;
     if (multi) {
       if (input.files?.length) {
         nameEl.textContent =
@@ -265,13 +393,71 @@ function wireFilePicker(inputId, chipId, nameId, multi = false) {
     }
   }
 
-  input.addEventListener("change", update);
-  clearBtn.addEventListener("click", () => {
-    const clone = input.cloneNode(true);
-    input.parentNode.replaceChild(clone, input);
-    clone.addEventListener("change", update);
-    chip.classList.add("hidden");
-  });
+  function clear() {
+    const input = getInput();
+    if (!input?.parentNode) return;
+
+    const accept = input.accept;
+    const multiple = multi || input.multiple;
+    const className = input.className;
+
+    const fresh = document.createElement("input");
+    fresh.type = "file";
+    fresh.id = inputId;
+    if (accept) fresh.accept = accept;
+    if (multiple) fresh.multiple = true;
+    if (className) fresh.className = className;
+
+    input.parentNode.replaceChild(fresh, input);
+    fresh.addEventListener("change", update);
+
+    chip?.classList.add("hidden");
+    if (nameEl) nameEl.textContent = "";
+  }
+
+  pickerRegistry[inputId] = { clear, update };
+
+  const input = getInput();
+  if (input) input.addEventListener("change", update);
+  if (clearBtn) {
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      clear();
+    });
+  }
+}
+
+function resetAllFilePickers() {
+  Object.values(pickerRegistry).forEach((picker) => picker.clear());
+}
+
+function resetNewVerificationState() {
+  state.currentJobId = null;
+  state.currentJobData = null;
+  state.liveProcessing = false;
+  state.processingJobId = null;
+  state.uploadMethod = null;
+  state.resultsPage = 1;
+  state.lastPollProcessed = -1;
+  state.lastProgressAt = 0;
+
+  resetAllFilePickers();
+
+  // Second pass after the upload view is visible — some browsers keep stale native labels
+  requestAnimationFrame(() => resetAllFilePickers());
+
+  $("#progressWrap")?.classList.add("hidden");
+  $("#studentProgressWrap")?.classList.add("hidden");
+  setProgress(0, "");
+  setStudentProgress(0, "");
+
+  $("#submitBtn").disabled = false;
+  $("#studentSubmitBtn").disabled = false;
+  $("#newVerificationBtn").disabled = false;
+
+  const banner = $("#resultsLiveBanner");
+  if (banner) banner.classList.add("hidden");
 }
 
 function setProgress(pct, message) {
@@ -379,7 +565,9 @@ function updateLiveBanner(data) {
   if (phaseEl) {
     phaseEl.textContent =
       data.status === "completed"
-        ? "All resumes verified — Excel report is ready."
+        ? isStudentMode()
+          ? "Your resume has been checked — see results below."
+          : "All resumes verified — Excel report is ready."
         : phaseDetail(data);
   }
   if (bar) bar.style.width = `${progressPercent(data)}%`;
@@ -421,7 +609,7 @@ function showLiveResults(data) {
 }
 
 async function pollJob(jobId) {
-  const res = await fetch(`/api/jobs/${jobId}`);
+  const res = await fetch(`${jobApiBase()}/${jobId}`);
   if (!res.ok) {
     state.liveProcessing = false;
     setProgress(0, "Job not found.");
@@ -453,6 +641,7 @@ async function pollJob(jobId) {
     state.liveProcessing = false;
     state.processingJobId = null;
     $("#submitBtn").disabled = false;
+    $("#studentSubmitBtn").disabled = false;
     $("#newVerificationBtn").disabled = false;
     if (data.outcomes_summary?.length) {
       cacheJobResults(data);
@@ -463,15 +652,17 @@ async function pollJob(jobId) {
     showLiveResults({ ...data, phase: "error" });
     const phaseEl = $("#liveBannerPhase");
     if (phaseEl) phaseEl.textContent = data.error || "Job failed";
-    saveRecentJob({
-      id: jobId,
-      method: state.uploadMethod,
-      status: "failed",
-      total: data.total,
-      created_at: data.created_at,
-      outcomes_summary: data.outcomes_summary,
-    });
-    renderHistoryTable();
+    if (!isStudentMode()) {
+      saveRecentJob({
+        id: jobId,
+        method: state.uploadMethod,
+        status: "failed",
+        total: data.total,
+        created_at: data.created_at,
+        outcomes_summary: data.outcomes_summary,
+      });
+      renderHistoryTable();
+    }
     return;
   }
 
@@ -481,19 +672,23 @@ async function pollJob(jobId) {
     cacheJobResults(data);
     renderResultsPage(data, { live: false });
     setProgress(100, "Verification complete.");
+    setStudentProgress(100, "Done.");
     $("#submitBtn").disabled = false;
+    $("#studentSubmitBtn").disabled = false;
     $("#newVerificationBtn").disabled = false;
-    saveRecentJob({
-      id: jobId,
-      method: state.uploadMethod,
-      status: "completed",
-      total: data.total,
-      created_at: data.created_at,
-      outcomes_summary: data.outcomes_summary,
-      report_ready: data.report_ready,
-    });
-    if (document.getElementById("view-history").classList.contains("active")) {
-      renderHistoryTable();
+    if (!isStudentMode()) {
+      saveRecentJob({
+        id: jobId,
+        method: state.uploadMethod,
+        status: "completed",
+        total: data.total,
+        created_at: data.created_at,
+        outcomes_summary: data.outcomes_summary,
+        report_ready: data.report_ready,
+      });
+      if (document.getElementById("view-history").classList.contains("active")) {
+        renderHistoryTable();
+      }
     }
   }
 }
@@ -515,13 +710,17 @@ function renderResultsPage(data, options = {}) {
   state.liveProcessing = isLive;
 
   if (isLive) {
-    $("#resultsTitle").textContent = "Live verification";
-    $("#resultsSubtitle").textContent = `Job ${shortJobId(data.id)} — review results as they finish`;
+    $("#resultsTitle").textContent = isStudentMode() ? "Checking your resume" : "Live verification";
+    $("#resultsSubtitle").textContent = isStudentMode()
+      ? "Review issues below before submitting your Drive link"
+      : `Job ${shortJobId(data.id)} — review results as they finish`;
     $("#resultsLiveBanner").classList.remove("hidden");
     $("#newVerificationBtn").disabled = true;
   } else {
-    $("#resultsTitle").textContent = "Verification complete";
-    $("#resultsSubtitle").textContent = `Job ID: ${shortJobId(data.id)} • ${formatJobTime(data.created_at)}`;
+    $("#resultsTitle").textContent = isStudentMode() ? "Resume check complete" : "Verification complete";
+    $("#resultsSubtitle").textContent = isStudentMode()
+      ? formatJobTime(data.created_at)
+      : `Job ID: ${shortJobId(data.id)} • ${formatJobTime(data.created_at)}`;
     const banner = $("#resultsLiveBanner");
     if (banner) banner.classList.add("hidden");
     $("#newVerificationBtn").disabled = false;
@@ -774,6 +973,69 @@ async function renderHistoryTable() {
   bindJobViewLinks(tbody);
 }
 
+function setStudentProgress(pct, message) {
+  const bar = $("#studentProgressBar");
+  const msg = $("#studentRunStatus");
+  if (bar) bar.style.width = `${pct}%`;
+  if (msg) msg.textContent = message || "";
+}
+
+async function runStudentVerification() {
+  const pdf = document.getElementById("studentPdf").files[0];
+  const checkLinks = document.getElementById("studentCheckLinks").checked;
+  if (!pdf) {
+    setStudentProgress(0, "Choose your resume PDF first.");
+    return;
+  }
+
+  $("#studentSubmitBtn").disabled = true;
+  $("#studentProgressWrap").classList.remove("hidden");
+  setStudentProgress(5, "Uploading…");
+
+  const form = new FormData();
+  form.append("resume", pdf);
+
+  let res;
+  try {
+    res = await fetch(`/api/student/verify?check_links=${checkLinks}`, {
+      method: "POST",
+      body: form,
+    });
+  } catch {
+    setStudentProgress(0, "Upload failed — check your connection.");
+    $("#studentSubmitBtn").disabled = false;
+    return;
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    setStudentProgress(0, err.detail || "Upload failed");
+    $("#studentSubmitBtn").disabled = false;
+    return;
+  }
+
+  state.uploadMethod = "student";
+  const { job_id } = await res.json();
+  state.currentJobId = job_id;
+  state.processingJobId = job_id;
+  state.lastPollProcessed = -1;
+  state.lastProgressAt = Date.now();
+  state.liveProcessing = true;
+
+  setStudentProgress(10, "Verifying…");
+  showLiveResults({
+    id: job_id,
+    status: "queued",
+    total: 1,
+    processed: 0,
+    phase: "queued",
+    outcomes_summary: [],
+    report_ready: false,
+    created_at: new Date().toISOString(),
+  });
+  pollJob(job_id);
+}
+
 async function runVerification() {
   const formsCsv = document.getElementById("formsCsv").files[0];
   const bundle = document.getElementById("bundle").files[0];
@@ -852,6 +1114,7 @@ function init() {
   wireFilePicker("bundle", "bundleChip", "bundleName");
   wireFilePicker("metadata", "metadataChip", "metadataName");
   wireFilePicker("pdfs", "pdfsChip", "pdfsName", true);
+  wireFilePicker("studentPdf", "studentPdfChip", "studentPdfName");
 
   $$(".nav-links a[data-view]").forEach((a) => {
     a.addEventListener("click", (e) => {
@@ -863,12 +1126,17 @@ function init() {
   window.addEventListener("popstate", () => loadRoute());
 
   $("#submitBtn").addEventListener("click", runVerification);
+  $("#studentSubmitBtn").addEventListener("click", runStudentVerification);
+  $("#adminLoginForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await submitAdminLogin($("#adminPassword").value);
+  });
+  $("#adminLogoutBtn")?.addEventListener("click", adminLogout);
   $("#clearHistoryBtn").addEventListener("click", clearHistory);
   $("#newVerificationBtn").addEventListener("click", () => {
     if (state.liveProcessing) return;
-    navigateTo("dashboard");
-    $("#progressWrap").classList.add("hidden");
-    setProgress(0, "");
+    resetNewVerificationState();
+    navigateTo(isStudentMode() ? "student" : "dashboard");
   });
   $("#downloadExcelBtn").addEventListener("click", () => {
     if (state.currentJobId) window.location.href = `/api/jobs/${state.currentJobId}/report`;

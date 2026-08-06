@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
 
 from typing import Annotated
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.auth import ADMIN_COOKIE, admin_configured, require_admin
 from app.api.jobs import JobStatus, job_store, mark_stale_running_jobs
 from app.bundle import extract_zip_bundle, resolve_pdfs_from_metadata
 from app.report.exporter import export_report_csv_zip, export_report_xlsx
 from app.form_csv import load_form_csv
 from app.form_pipeline import process_form_csv_async
 from app.rules.reasons import failures_to_json_records
-from app.verify import verify_batch_async
+from app.verify import verify_batch_async, verify_pdf_async
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = APP_ROOT / "static"
@@ -44,7 +46,9 @@ def _resume_rel_path(work_dir: Path, pdf_path: Path) -> str:
         return pdf_path.name
 
 
-def _outcome_summary_entry(job_id: str, work_dir: Path, outcome) -> dict:
+def _outcome_summary_entry(
+    job_id: str, work_dir: Path, outcome, resume_api_prefix: str = "/api/jobs"
+) -> dict:
     resume_file = _resume_rel_path(work_dir, outcome.path)
     return {
         "filename": outcome.filename,
@@ -56,7 +60,7 @@ def _outcome_summary_entry(job_id: str, work_dir: Path, outcome) -> dict:
         "soft_flags": outcome.evaluation.soft_flag_count,
         "issues": _outcome_issues(outcome),
         "resume_file": resume_file,
-        "resume_url": f"/api/jobs/{job_id}/resume/{resume_file}",
+        "resume_url": f"{resume_api_prefix}/{job_id}/resume/{resume_file}",
     }
 
 if STATIC_DIR.exists():
@@ -75,21 +79,150 @@ def _index_html() -> HTMLResponse:
 
 @app.get("/")
 async def root() -> RedirectResponse:
-    return RedirectResponse(url="/dashboard", status_code=302)
+    return RedirectResponse(url="/student", status_code=302)
 
 
+@app.get("/student", response_class=HTMLResponse)
+@app.get("/student/results/{job_id}", response_class=HTMLResponse)
+async def spa_pages_student() -> HTMLResponse:
+    return _index_html()
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 @app.get("/history", response_class=HTMLResponse)
 @app.get("/docs", response_class=HTMLResponse)
 @app.get("/results", response_class=HTMLResponse)
 @app.get("/results/{job_id}", response_class=HTMLResponse)
-async def spa_pages(job_id: str | None = None) -> HTMLResponse:
+async def spa_pages_admin() -> HTMLResponse:
     return _index_html()
 
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/admin/session")
+async def admin_session(
+    rv_admin: Annotated[str | None, Cookie(alias=ADMIN_COOKIE)] = None,
+) -> dict[str, bool]:
+    authenticated = not admin_configured() or rv_admin == "ok"
+    return {"authenticated": authenticated, "password_required": admin_configured()}
+
+
+@app.post("/api/admin/login")
+async def admin_login(password: str = Form(...)) -> JSONResponse:
+    if not admin_configured():
+        response = JSONResponse({"ok": True, "message": "No admin password configured"})
+        response.set_cookie(ADMIN_COOKIE, "ok", httponly=True, samesite="lax")
+        return response
+    if password != os.environ.get("RESUMEVERIFY_ADMIN_PASSWORD", ""):
+        raise HTTPException(status_code=403, detail="Invalid password")
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        ADMIN_COOKIE,
+        "ok",
+        httponly=True,
+        samesite="lax",
+        max_age=86400 * 30,
+    )
+    return response
+
+
+@app.post("/api/admin/logout")
+async def admin_logout() -> JSONResponse:
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(ADMIN_COOKIE)
+    return response
+
+
+async def _run_student_job(
+    job_id: str,
+    pdf_path: Path,
+    work_dir: Path,
+    check_links: bool,
+) -> None:
+    job_store.update(job_id, status=JobStatus.RUNNING, phase="rules", work_dir=work_dir)
+    try:
+        outcome = await verify_pdf_async(
+            pdf_path,
+            metadata=None,
+            check_links=check_links,
+            student_self_check=True,
+        )
+        summary_entry = _outcome_summary_entry(
+            job_id, work_dir, outcome, resume_api_prefix="/api/student/jobs"
+        )
+        job_store.update(
+            job_id,
+            processed=1,
+            phase="done",
+            outcomes_summary=[summary_entry],
+            status=JobStatus.COMPLETED,
+        )
+    except Exception as exc:
+        job_store.update(
+            job_id,
+            status=JobStatus.FAILED,
+            phase="error",
+            error=str(exc),
+        )
+
+
+@app.post("/api/student/verify")
+async def student_verify(
+    background_tasks: BackgroundTasks,
+    resume: UploadFile = File(...),
+    check_links: bool = Query(True),
+) -> dict:
+    if not resume.filename or not resume.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Upload a PDF resume")
+
+    work_dir = Path(tempfile.mkdtemp(prefix="rv_student_", dir=UPLOAD_ROOT))
+    dest = work_dir / resume.filename
+    with dest.open("wb") as f:
+        shutil.copyfileobj(resume.file, f)
+
+    job = job_store.create(total=1, method="student")
+    background_tasks.add_task(
+        _run_student_job,
+        job.id,
+        dest,
+        work_dir,
+        check_links,
+    )
+    return {"job_id": job.id, "total": 1, "status": job.status.value}
+
+
+@app.get("/api/student/jobs/{job_id}")
+async def get_student_job(job_id: str) -> dict:
+    job = job_store.get(job_id)
+    if not job or job.method != "student":
+        raise HTTPException(status_code=404, detail="Job not found")
+    data = job.to_dict()
+    if data.get("outcomes_summary"):
+        for entry in data["outcomes_summary"]:
+            entry["resume_url"] = (
+                f"/api/student/jobs/{job_id}/resume/{entry.get('resume_file', '')}"
+            )
+    return data
+
+
+@app.get("/api/student/jobs/{job_id}/resume/{resume_path:path}")
+async def download_student_resume(job_id: str, resume_path: str) -> FileResponse:
+    job = job_store.get(job_id)
+    if not job or job.method != "student" or not job.work_dir:
+        raise HTTPException(status_code=404, detail="Job not found")
+    base = Path(job.work_dir).resolve()
+    target = (base / resume_path).resolve()
+    if not str(target).startswith(str(base)) or not target.is_file():
+        raise HTTPException(status_code=404, detail="Resume PDF not found")
+    return FileResponse(
+        target,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{target.name}"'},
+    )
 
 
 async def _run_batch_job(
@@ -209,6 +342,7 @@ async def create_batch_from_forms_csv(
     background_tasks: BackgroundTasks,
     form_csv: UploadFile = File(...),
     check_links: bool = Query(True),
+    _: None = Depends(require_admin),
 ) -> dict:
     """Google Forms CSV with Resume column containing Google Drive links."""
     if not form_csv.filename:
@@ -250,6 +384,7 @@ async def create_batch(
     resumes: Annotated[list[UploadFile], File()] = [],
     metadata: UploadFile | None = File(None),
     check_links: bool = Query(True),
+    _: None = Depends(require_admin),
 ) -> dict:
     work_dir = Path(tempfile.mkdtemp(prefix="rv_", dir=UPLOAD_ROOT))
     pdf_paths: list[Path] = []
@@ -317,7 +452,7 @@ async def create_batch(
 
 
 @app.post("/api/jobs/clear")
-async def clear_jobs() -> dict[str, int | str]:
+async def clear_jobs(_: None = Depends(require_admin)) -> dict[str, int | str]:
     """Remove all jobs from memory/disk and delete old batch work folders."""
     job_store.clear_all()
     removed = 0
@@ -329,8 +464,11 @@ async def clear_jobs() -> dict[str, int | str]:
 
 
 @app.get("/api/jobs")
-async def list_jobs(limit: int = Query(20, ge=1, le=100)) -> dict:
-    jobs = job_store.list_recent(limit)
+async def list_jobs(
+    limit: int = Query(20, ge=1, le=100),
+    _: None = Depends(require_admin),
+) -> dict:
+    jobs = [j for j in job_store.list_recent(limit * 2) if j.method != "student"][:limit]
     return {
         "jobs": [
             {
@@ -349,7 +487,7 @@ async def list_jobs(limit: int = Query(20, ge=1, le=100)) -> dict:
 
 
 @app.get("/api/jobs/{job_id}")
-async def get_job(job_id: str) -> dict:
+async def get_job(job_id: str, _: None = Depends(require_admin)) -> dict:
     job = job_store.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -357,7 +495,11 @@ async def get_job(job_id: str) -> dict:
 
 
 @app.get("/api/jobs/{job_id}/resume/{resume_path:path}")
-async def download_resume_pdf(job_id: str, resume_path: str) -> FileResponse:
+async def download_resume_pdf(
+    job_id: str,
+    resume_path: str,
+    _: None = Depends(require_admin),
+) -> FileResponse:
     job = job_store.get(job_id)
     if not job or not job.work_dir:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -378,6 +520,7 @@ async def download_resume_pdf(job_id: str, resume_path: str) -> FileResponse:
 async def download_report(
     job_id: str,
     format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    _: None = Depends(require_admin),
 ) -> FileResponse:
     job = job_store.get(job_id)
     if not job:

@@ -9,6 +9,10 @@ from app.models import DocumentModel
 from app.rules.base import RuleResult, Severity
 
 
+def _is_placeholder_url(url: str) -> bool:
+    return any(pattern.search(url) for pattern in PLACEHOLDER_URL_PATTERNS)
+
+
 def _all_urls(doc: DocumentModel) -> list[str]:
     urls = [
         l.uri
@@ -16,6 +20,11 @@ def _all_urls(doc: DocumentModel) -> list[str]:
         if l.uri and not l.uri.startswith("mailto:") and not l.uri.startswith("tel:")
     ]
     return list(dict.fromkeys(urls))
+
+
+def checkable_urls(doc: DocumentModel) -> list[str]:
+    """URLs worth network validation — skips placeholders (R501 covers those)."""
+    return [u for u in _all_urls(doc) if not _is_placeholder_url(u)]
 
 
 def _domain(url: str) -> str:
@@ -90,10 +99,8 @@ def check_static_link_rules(doc: DocumentModel) -> list[RuleResult]:
 
     placeholder_hits: list[str] = []
     for url in urls:
-        for pattern in PLACEHOLDER_URL_PATTERNS:
-            if pattern.search(url):
-                placeholder_hits.append(_link_failure_reason(doc, url, None, "placeholder"))
-                break
+        if _is_placeholder_url(url):
+            placeholder_hits.append(_link_failure_reason(doc, url, None, "placeholder"))
 
     results.append(
         RuleResult(
@@ -144,6 +151,9 @@ def network_link_results(
     soft_count = 0
 
     for url in urls:
+        if _is_placeholder_url(url):
+            continue
+
         status, note = url_statuses.get(url, (None, "not checked"))
         domain = _domain(url)
 
